@@ -1,4 +1,4 @@
-// Uji: pilih pelatihan saat registrasi, data diri wajib setelah bayar, kelas terkunci sebelum itu, pemisahan Pendaftar dan Peserta.
+// Uji: registrasi per program, data diri sebelum bayar pendaftaran, validasi data diri, akses berkas.
 const BASE = process.env.API || 'http://localhost:4000'
 let pass = 0, failed = 0
 const check = (name, cond, extra = '') => { if (cond) { pass++; console.log('  ok  ', name) } else { failed++; console.log('  GAGAL', name, extra) } }
@@ -21,45 +21,59 @@ const stamp = Date.now()
 const nik = () => String(Math.floor(Math.random() * 9e15) + 1e15).slice(0, 16)
 const profileFields = (over = {}) => ({
   fullName: 'Peserta Uji Data', nik: nik(), birthPlace: 'Cimahi', birthDate: '2001-05-20', gender: 'P', address: 'Jl. Uji No. 5', rt: '003', rw: '007', provinceId: '32', cityId: '3277', districtId: '3277010',
-  postalCode: '40511', phone: '081234567890', education: 'SMA/SMK', occupation: 'Belum bekerja', emergencyName: 'Wali Uji', emergencyRelation: 'Orang tua', emergencyPhone: '081298765432', ...over,
+  postalCode: '40511', phone: '081234567890', education: 'SMA/SMK', occupation: 'Belum bekerja', school: 'SMK Uji Cimahi', ...over,
 })
 
 const anon = new Client()
 const pub = await anon.state()
-const fo = pub.batches.find((b) => b.code === 'FO-2026-B3')
+const fo = pub.batches.find((b) => b.status === 'open')
 
 console.log('Registrasi dengan pilihan pelatihan')
-const reg = (over = {}) => ({ name: 'Calon Uji', email: `uji${stamp}${Math.floor(Math.random() * 1000)}@example.com`, phone: '081200000000', password: 'rahasia123', batchId: fo.id, ...over })
-check('daftar tanpa pilihan pelatihan ditolak', (await new Client().json('/api/auth/register', reg({ batchId: '' }))).ok !== true)
-check('daftar ke angkatan yang tidak dibuka ditolak', (await new Client().json('/api/auth/register', reg({ batchId: pub.batches.find((b) => b.status === 'running').id }))).ok !== true)
+const myNik = nik()
+const reg = (over = {}) => ({ name: 'Calon Uji', email: `uji${stamp}${Math.floor(Math.random() * 1000)}@example.com`, nik: nik(), birthDate: '2001-05-20', password: 'rahasia123', programId: fo.programId, ...over })
+check('daftar tanpa pilihan pelatihan ditolak', (await new Client().json('/api/auth/register', reg({ programId: '' }))).ok !== true)
+check('daftar ke program yang tidak ada ditolak', (await new Client().json('/api/auth/register', reg({ programId: crypto.randomUUID() }))).ok !== true)
 const me = new Client(); const email = `uji${stamp}@example.com`
-const created = await me.json('/api/auth/register', reg({ email }))
+const created = await me.json('/api/auth/register', reg({ email, nik: myNik }))
 check('daftar dengan pilihan pelatihan berhasil', created.ok === true, JSON.stringify(created))
 const st = await me.state()
-check('tagihan terbit otomatis untuk angkatan pilihan', st.registrations.length === 1 && st.registrations[0].batchId === fo.id && st.registrations[0].status === 'pending_payment')
+check('tagihan terbit otomatis untuk program pilihan, tanpa angkatan', st.registrations.length === 1 && st.registrations[0].programId === fo.programId && st.registrations[0].batchId === '' && st.registrations[0].status === 'pending_payment')
+const adm0 = new Client(); await adm0.login('pendaftaran@cih.demo')
+const otherProg = (await adm0.state()).programs.find((p) => p.id !== fo.programId)
+const otherBatch = { id: crypto.randomUUID() }
+await adm0.rpc('saveBatch', { id: otherBatch.id, programId: otherProg.id, code: 'UJI-X-' + stamp % 100000, startDate: '2027-01-01', endDate: '2027-02-01', quota: 5, status: 'open', instructorId: '', location: 'x' })
+check('admin tidak bisa memilih angkatan dari program lain', (await adm0.rpc('assignBatch', st.registrations[0].id, otherBatch.id)).ok !== true)
+check('peserta tidak bisa menetapkan angkatan sendiri', (await me.rpc('assignBatch', st.registrations[0].id, fo.id)).ok !== true)
+check('admin menetapkan angkatan', (await adm0.rpc('assignBatch', st.registrations[0].id, fo.id)).ok === true)
+check('angkatan tersimpan di registrasi', (await me.state()).registrations[0].batchId === fo.id)
+check('usia di atas 30 tahun ditolak', (await new Client().json('/api/auth/register', reg({ birthDate: '1990-01-01' }))).ok !== true)
+check('NIK bukan 16 digit saat daftar ditolak', (await new Client().json('/api/auth/register', reg({ nik: '123' }))).ok !== true)
+check('NIK ganda saat daftar ditolak', (await new Client().json('/api/auth/register', reg({ nik: myNik }))).ok !== true)
 check('email duplikat ditolak', (await new Client().json('/api/auth/register', reg({ email }))).ok !== true)
 
-console.log('Data diri dikunci sebelum pembayaran dikonfirmasi')
-const early = await me.form('/api/upload/profile', profileFields(), { photo: img('f.png'), ktp: img('k.png') })
-check('isi data diri sebelum bayar ditolak', early.status === 403, JSON.stringify(early))
-
-console.log('Pembayaran dikonfirmasi, data diri belum diisi')
+console.log('Pembayaran pendaftaran dikonfirmasi, data diri belum diisi')
 const regRow = st.registrations[0]
-await me.form(`/api/upload/proof/${regRow.id}`, { payerName: 'Calon Uji', transferDate: '2026-11-08', amountPaid: regRow.priceSnapshot + regRow.uniqueCode }, { file: img('b.png') })
+check('tahap awal: data diri', regRow.stage === 'data')
 const uang = new Client(); await uang.login('keuangan@cih.demo')
+await me.form('/api/upload/profile', profileFields({ nik: 'x' }))
+const proofEarly = await me.form(`/api/upload/proof/${regRow.id}`, { kind: 'pendaftaran', payerName: 'Calon Uji', transferDate: '2026-11-08', amountPaid: 200000 }, { file: img('b.png') })
+check('bayar pendaftaran sebelum data diri lengkap ditolak', proofEarly.ok !== true, JSON.stringify(proofEarly))
+await me.form('/api/upload/profile', profileFields({ nik: myNik, fullName: 'Nama Sementara' }))
+check('data diri lengkap memindahkan ke tahap bayar', (await me.state()).registrations[0].stage === 'bayar_daftar')
+check('notifikasi bayar pendaftaran muncul', (await me.state()).notifications.some((n) => /bayar biaya pendaftaran/i.test(n.title)))
+const proof = await me.form(`/api/upload/proof/${regRow.id}`, { kind: 'pendaftaran', payerName: 'Calon Uji', transferDate: '2026-11-08', amountPaid: 200000 }, { file: img('b.png') })
+check('bukti pendaftaran terunggah', proof.ok === true, JSON.stringify(proof))
 const pay = (await uang.state()).payments.find((p) => p.registrationId === regRow.id && p.status === 'submitted')
 check('keuangan menyetujui', (await uang.rpc('verifyPayment', pay.id)).ok === true)
 const locked = await me.state()
-check('registrasi aktif tapi belum profileDone', locked.registrations[0].status === 'active' && locked.users[0].profileDone === false)
-check('jadwal, materi, tugas tidak dikirim ke peserta tanpa data diri', locked.sessions.length === 0 && locked.materials.length === 0 && locked.assignments.length === 0)
+check('tahap ujian terbuka', locked.registrations[0].stage === 'ujian' && locked.registrations[0].status === 'pending_payment')
+check('peserta menerima notifikasi konfirmasi', locked.notifications.some((n) => /dikonfirmasi/i.test(n.title)))
+check('jadwal, materi, tugas tidak dikirim ke peserta', locked.sessions.length === 0 && locked.materials.length === 0 && locked.assignments.length === 0)
 
 console.log('Admin: pendaftar vs peserta')
 const adm = new Client(); await adm.login('pendaftaran@cih.demo')
 let as = await adm.state()
 const myUser = as.users.find((u) => u.email === email)
-check('muncul sebagai pendaftar (profileDone=false)', myUser.profileDone === false)
-check('belum ada di daftar peserta (profil lengkap)', !as.profiles.some((p) => p.userId === myUser.id && p.completed))
-check('Admin Pendaftaran mengirim pengingat', (await adm.rpc('remindProfile', myUser.id)).ok === true)
 check('Keuangan tidak bisa mengirim pengingat', (await uang.rpc('remindProfile', myUser.id)).status === 403)
 check('Keuangan tidak menerima data profil', (await uang.state()).profiles.length === 0)
 
@@ -75,7 +89,7 @@ check('kode wilayah tidak valid ditolak', (await anon.req('/api/wilayah/regencie
 check('provinsi tak dikenal mengembalikan daftar kosong', (await (await anon.req('/api/wilayah/regencies/99')).json()).length === 0)
 
 console.log('Validasi data diri')
-const ok1 = { photo: img('f.png'), ktp: img('k.png') }
+const ok1 = {}
 check('kecamatan dari kota lain ditolak', (await me.form('/api/upload/profile', profileFields({ districtId: '3273010' }), ok1)).ok !== true)
 check('kota yang bukan bagian provinsi ditolak', (await me.form('/api/upload/profile', profileFields({ cityId: '3171' }), ok1)).ok !== true)
 check('kode wilayah ngawur ditolak', (await me.form('/api/upload/profile', profileFields({ districtId: '0000000' }), ok1)).ok !== true)
@@ -87,13 +101,8 @@ check('tanggal lahir tidak masuk akal ditolak', (await me.form('/api/upload/prof
 check('nomor telepon salah ditolak', (await me.form('/api/upload/profile', profileFields({ phone: 'abc' }), ok1)).ok !== true)
 check('kode pos salah ditolak', (await me.form('/api/upload/profile', profileFields({ postalCode: '12' }), ok1)).ok !== true)
 check('pendidikan di luar daftar ditolak', (await me.form('/api/upload/profile', profileFields({ education: 'Hacker' }), ok1)).ok !== true)
-check('tanpa pas foto ditolak', (await me.form('/api/upload/profile', profileFields(), { ktp: img('k.png') })).ok !== true)
-check('tanpa KTP ditolak', (await me.form('/api/upload/profile', profileFields(), { photo: img('f.png') })).ok !== true)
-check('berkas palsu ditolak', (await me.form('/api/upload/profile', profileFields(), { photo: { bytes: Buffer.from('bukan gambar sama sekali, hanya teks'), type: 'image/png', name: 'x.png' }, ktp: img('k.png') })).ok !== true)
-check('state tetap belum lengkap setelah semua gagal', (await me.state()).users[0].profileDone === false)
 
 console.log('Data diri lengkap')
-const myNik = nik()
 const good = await me.form('/api/upload/profile', profileFields({ nik: myNik, fullName: 'Nama Sesuai KTP' }), ok1)
 check('data diri valid tersimpan', good.ok === true, JSON.stringify(good))
 const after = await me.state()
@@ -109,11 +118,6 @@ check('peserta tidak melihat profil orang lain', os.profiles.every((p) => p.user
 as = await adm.state()
 check('kini masuk daftar peserta', as.profiles.some((p) => p.userId === myUser.id && p.completed))
 check('pengingat ditolak untuk yang sudah lengkap', (await adm.rpc('remindProfile', myUser.id)).ok === false)
-const photoId = after.profiles[0].photoFileId
-check('pemilik bisa membuka foto', (await me.req(`/api/files/${photoId}`)).status === 200)
-check('peserta lain tidak bisa membuka foto', (await other.req(`/api/files/${photoId}`)).status === 404)
-check('Admin Pendaftaran bisa membuka KTP', (await adm.req(`/api/files/${after.profiles[0].ktpFileId}`)).status === 200)
-check('Keuangan tidak bisa membuka KTP', (await uang.req(`/api/files/${after.profiles[0].ktpFileId}`)).status === 404)
 const upd = await me.form('/api/upload/profile', profileFields({ nik: myNik, address: 'Alamat baru 9' }), {})
 check('perbarui data tanpa unggah ulang berkas', upd.ok === true, JSON.stringify(upd))
 

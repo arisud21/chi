@@ -1,8 +1,8 @@
 import { IconAlertTriangle, IconCircleCheck, IconCircleX, IconSearch } from '@tabler/icons-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
-import { Badge, Field, dateID, rupiah, useAct, useToast } from '../../components/ui'
-import { forgotPassword, login, register, resetPassword, seatsTaken, useStore, verifyCertificate, verifyEmailToken } from '../../lib/store'
+import { Badge, Field, PasswordInput, dateID, rupiah, useAct, useToast } from '../../components/ui'
+import { forgotPassword, login, register, resetPassword, useStore, verifyCertificate } from '../../lib/store'
 
 interface Found { found: boolean; holder?: string; program?: string; number?: string; status?: 'issued' | 'revoked'; issuedAt?: string }
 
@@ -77,7 +77,7 @@ export function Login() {
         <h1 className="font-display text-2xl font-bold">Masuk</h1>
         {(loc.state as any)?.from && <p className="text-sm text-muted">Masuk dulu untuk membuka halaman tersebut.</p>}
         <Field label="Email"><input className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></Field>
-        <Field label="Password"><input className="input" type="password" required value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></Field>
+        <Field label="Password"><PasswordInput required value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></Field>
         <button className="btn-primary w-full" disabled={busy}>{busy ? 'Memeriksa…' : 'Masuk'}</button>
         <div className="flex justify-between text-sm text-muted"><span>Belum punya akun? <Link to="/daftar" className="font-semibold text-brand-600">Daftar</Link></span><Link to="/lupa-password" className="font-semibold text-brand-600">Lupa password</Link></div>
       </form>
@@ -96,6 +96,12 @@ export function Login() {
   )
 }
 
+const MIN_AGE = 14
+const MAX_AGE = 30
+const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+/** Rentang tanggal lahir yang membuat usia penuh hari ini antara MIN_AGE dan MAX_AGE. */
+const birthRange = () => { const n = new Date(); return { bdMin: ymd(new Date(n.getFullYear() - MAX_AGE - 1, n.getMonth(), n.getDate() + 1)), bdMax: ymd(new Date(n.getFullYear() - MIN_AGE, n.getMonth(), n.getDate())) } }
+
 const TYPO: Record<string, string> = { 'gmial.com': 'gmail.com', 'gmai.com': 'gmail.com', 'gmail.co': 'gmail.com', 'yahooo.com': 'yahoo.com', 'hotmial.com': 'hotmail.com' }
 
 export function Register() {
@@ -104,61 +110,52 @@ export function Register() {
   const [sp] = useSearchParams()
   const s = useStore((x) => x)
   const me = s.users.find((u) => u.id === s.sessionUserId)
-  const open = s.batches.filter((b) => b.status === 'open').sort((a, b) => a.startDate.localeCompare(b.startDate))
-  const programs = s.programs.filter((p) => p.active && !p.archived && open.some((b) => b.programId === p.id))
-  const pre = open.find((b) => b.id === sp.get('batch'))
-  const [programId, setProgramId] = useState(pre?.programId ?? '')
-  const [batchId, setBatchId] = useState(pre?.id ?? '')
-  const [f, setF] = useState({ name: '', email: '', email2: '', phone: '', password: '', consent: false, website: '' })
+  const programs = s.programs.filter((p) => p.active && !p.archived)
+  const pre = s.batches.find((b) => b.id === sp.get('batch'))
+  const [programId, setProgramId] = useState(programs.some((p) => p.id === pre?.programId) ? pre!.programId : '')
+  const [f, setF] = useState({ name: '', email: '', email2: '', nik: '', birthDate: '', password: '', consent: false, website: '' })
   const [busy, setBusy] = useState(false)
-  const batches = open.filter((b) => b.programId === programId)
   const prog = programs.find((p) => p.id === programId)
-  const batch = batches.find((b) => b.id === batchId)
+  const { bdMin, bdMax } = birthRange()
   const dom = f.email.split('@')[1]?.toLowerCase()
   const typo = dom && TYPO[dom]
   const mismatch = f.email2 !== '' && f.email !== f.email2
+  const nikBad = f.nik !== '' && !/^\d{16}$/.test(f.nik)
 
   if (me?.role === 'peserta') {
-    return <div className="mx-auto max-w-lg px-4 py-14 text-center"><p className="font-semibold">Anda sudah punya akun.</p><p className="mt-1 text-sm text-muted">Pilih pelatihan tambahan lewat katalog di portal peserta.</p><Link to="/app/katalog" className="btn-primary mt-4">Ke katalog</Link></div>
+    return <div className="mx-auto max-w-lg px-4 py-14 text-center"><p className="font-semibold">Anda sudah punya akun.</p><p className="mt-1 text-sm text-muted">Lanjutkan tahapan penerimaan di portal peserta.</p><Link to="/app" className="btn-primary mt-4">Ke tahapan</Link></div>
   }
 
-  const pickProgram = (id: string) => { setProgramId(id); const first = open.filter((b) => b.programId === id); setBatchId(first.length === 1 ? first[0].id : '') }
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!batchId) return toast('Pilih jenis pelatihan dan angkatan.', 'err')
+    if (!programId) return toast('Pilih jenis pelatihan.', 'err')
     if (f.email !== f.email2) return toast('Email dan konfirmasi email belum sama.', 'err')
+    if (!/^\d{16}$/.test(f.nik)) return toast('NIK harus 16 digit angka.', 'err')
+    if (f.birthDate < bdMin || f.birthDate > bdMax) return toast(`Pendaftaran hanya untuk usia ${MIN_AGE} sampai ${MAX_AGE} tahun.`, 'err')
     if (f.password.length < 8) return toast('Password minimal 8 karakter.', 'err')
     setBusy(true)
-    const r = await register({ ...f, batchId })
+    const r = await register({ ...f, programId })
     setBusy(false)
     if (!r.ok) return toast(r.error, 'err')
-    toast('Akun dan tagihan dibuat. Selesaikan pembayaran untuk mengaktifkan pendaftaran.')
-    nav('/app/pendaftaran')
+    toast('Registrasi berhasil. Lengkapi data diri Anda.')
+    nav('/app/data-diri')
   }
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
   return (
     <div className="mx-auto max-w-lg px-4 py-14 sm:px-6">
       <form onSubmit={submit} className="card space-y-4 p-6">
-        <div><h1 className="font-display text-2xl font-bold">Daftar pelatihan</h1><p className="mt-1 text-sm text-muted">Pilih pelatihan, buat akun, lalu tagihan langsung terbit. Data diri lengkap diisi setelah pembayaran dikonfirmasi.</p></div>
+        <div><h1 className="font-display text-2xl font-bold">Registrasi pelatihan</h1><p className="mt-1 text-sm text-muted">Pilih pelatihan dan buat akun. Berikutnya: isi data diri, bayar biaya pendaftaran, ujian tulis, lalu pengumuman hasil seleksi.</p></div>
 
         <fieldset className="space-y-3 rounded-xl bg-brand-50 p-4">
           <legend className="px-1 text-sm font-bold">1. Pilih pelatihan</legend>
           <Field label="Jenis pelatihan">
-            <select className="input" required value={programId} onChange={(e) => pickProgram(e.target.value)}>
+            <select className="input" required value={programId} onChange={(e) => setProgramId(e.target.value)}>
               <option value="">Pilih jenis pelatihan</option>
               {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
             </select>
           </Field>
-          {programId && (
-            <Field label="Angkatan">
-              <select className="input" required value={batchId} onChange={(e) => setBatchId(e.target.value)}>
-                <option value="">Pilih angkatan</option>
-                {batches.map((b) => { const left = b.quota - seatsTaken(s, b.id); return <option key={b.id} value={b.id} disabled={left <= 0}>{b.code} · mulai {dateID(b.startDate)} · {left > 0 ? `sisa ${left} kursi` : 'penuh'}</option> })}
-              </select>
-            </Field>
-          )}
-          {prog && batch && <p className="text-sm">Biaya <b>{rupiah(prog.price)}</b> · {prog.durationHours} jam · batas bayar {s.settings.payDueHours ?? 48} jam setelah daftar</p>}
-          {programs.length === 0 && <p className="text-sm text-muted">Belum ada angkatan yang dibuka. Cek kembali segera.</p>}
+          {prog && <p className="text-sm">Biaya pelatihan <b>{rupiah(prog.price)}</b> · {prog.durationHours} jam. Biaya pendaftaran {rupiah(s.settings.regFee ?? 200000)}, dibayar setelah data diri lengkap. Angkatan ditentukan admin setelah Anda lulus.</p>}
+          {programs.length === 0 && <p className="text-sm text-muted">Belum ada jenis pelatihan yang dibuka. Cek kembali segera.</p>}
         </fieldset>
 
         <p className="pt-1 text-sm font-bold">2. Data akun</p>
@@ -168,28 +165,14 @@ export function Register() {
           {typo && <span className="mt-1 block text-xs font-medium text-amber-700">Maksud Anda <button type="button" className="underline" onClick={() => setF({ ...f, email: f.email.replace(dom!, typo) })}>{f.email.replace(dom!, typo)}</button>?</span>}
         </Field>
         <Field label="Ketik ulang email"><input className="input" type="email" required value={f.email2} onChange={set('email2')} onPaste={(e) => e.preventDefault()} aria-invalid={mismatch} />{mismatch && <span className="mt-1 block text-xs font-medium text-red-700">Belum sama dengan email di atas.</span>}</Field>
-        <Field label="Nomor telepon"><input className="input" type="tel" required value={f.phone} onChange={set('phone')} autoComplete="tel" /></Field>
-        <Field label="Password" hint="Minimal 8 karakter."><input className="input" type="password" required minLength={8} value={f.password} onChange={set('password')} autoComplete="new-password" /></Field>
+        <Field label="NIK" hint={nikBad ? 'NIK harus 16 digit angka.' : '16 digit sesuai KTP. Satu NIK hanya untuk satu akun.'}><input className={`input font-mono ${nikBad ? '!border-red-500' : ''}`} required inputMode="numeric" maxLength={16} value={f.nik} onChange={(e) => setF({ ...f, nik: e.target.value.replace(/\D/g, '') })} autoComplete="off" /></Field>
+        <Field label="Tanggal lahir" hint={`Usia maksimal ${MAX_AGE} tahun.`}><input className="input" type="date" required min={bdMin} max={bdMax} value={f.birthDate} onChange={set('birthDate')} autoComplete="bday" /></Field>
+        <Field label="Password" hint="Minimal 8 karakter."><PasswordInput required minLength={8} value={f.password} onChange={set('password')} autoComplete="new-password" /></Field>
         <input type="text" name="website" value={f.website} onChange={set('website')} tabIndex={-1} autoComplete="off" aria-hidden className="absolute -left-[9999px] h-0 w-0 opacity-0" />
         <label className="flex items-start gap-3 text-sm"><input type="checkbox" required checked={f.consent} onChange={set('consent')} className="mt-1 size-4 accent-brand-600" />Saya setuju data saya diproses untuk keperluan pelatihan sesuai kebijakan privasi (UU PDP).</label>
-        <button className="btn-primary w-full" disabled={busy || !batchId}>{busy ? 'Membuat akun…' : 'Daftar dan terbitkan tagihan'}</button>
+        <button className="btn-primary w-full" disabled={busy || !programId}>{busy ? 'Membuat akun…' : 'Registrasi'}</button>
         <p className="text-sm text-muted">Sudah punya akun? <Link to="/masuk" className="font-semibold text-brand-600">Masuk</Link></p>
       </form>
-    </div>
-  )
-}
-
-export function VerifyEmailPage() {
-  const [sp] = useSearchParams()
-  const [state, setState] = useState<'loading' | 'ok' | string>('loading')
-  useEffect(() => {
-    verifyEmailToken(sp.get('token') ?? '').then((r) => setState(r.ok ? 'ok' : r.error))
-  }, [sp])
-  return (
-    <div className="mx-auto max-w-md px-4 py-20 text-center">
-      {state === 'loading' ? <p className="text-muted">Memverifikasi…</p> : state === 'ok'
-        ? <><IconCircleCheck className="mx-auto text-emerald-600" size={40} /><h1 className="mt-3 font-display text-2xl font-bold">Email terverifikasi</h1><p className="mt-2 text-sm text-muted">Sertifikat dan transkrip kini dapat dikirim ke email Anda.</p><Link to="/app" className="btn-primary mt-5">Ke dashboard</Link></>
-        : <><IconCircleX className="mx-auto text-red-600" size={40} /><h1 className="mt-3 font-display text-2xl font-bold">Verifikasi gagal</h1><p className="mt-2 text-sm text-muted">{state}</p><Link to="/app" className="btn-ghost mt-5">Minta tautan baru dari dashboard</Link></>}
     </div>
   )
 }
@@ -200,10 +183,10 @@ export function ForgotPassword() {
   const [sent, setSent] = useState(false)
   return (
     <div className="mx-auto max-w-md px-4 py-14">
-      <form className="card space-y-4 p-6" onSubmit={(e) => { e.preventDefault(); act(forgotPassword(email), 'Jika email terdaftar dan terverifikasi, tautan dikirim.', () => setSent(true)) }}>
+      <form className="card space-y-4 p-6" onSubmit={(e) => { e.preventDefault(); act(forgotPassword(email), 'Jika email terdaftar, tautan dikirim.', () => setSent(true)) }}>
         <h1 className="font-display text-2xl font-bold">Lupa password</h1>
-        {sent ? <p className="text-sm text-muted">Periksa email Anda. Tautan berlaku satu jam. Bila email belum pernah diverifikasi, hubungi admin.</p> : <>
-          <Field label="Email" hint="Hanya untuk email yang sudah terverifikasi."><input className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
+        {sent ? <p className="text-sm text-muted">Periksa email Anda. Tautan berlaku satu jam.</p> : <>
+          <Field label="Email" hint="Email yang dipakai saat mendaftar."><input className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
           <button className="btn-primary w-full">Kirim tautan</button></>}
       </form>
     </div>
@@ -219,7 +202,7 @@ export function ResetPassword() {
     <div className="mx-auto max-w-md px-4 py-14">
       <form className="card space-y-4 p-6" onSubmit={(e) => { e.preventDefault(); act(resetPassword(sp.get('token') ?? '', pw), 'Password diganti. Silakan masuk.', () => nav('/masuk')) }}>
         <h1 className="font-display text-2xl font-bold">Password baru</h1>
-        <Field label="Password baru" hint="Minimal 8 karakter."><input className="input" type="password" required minLength={8} value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></Field>
+        <Field label="Password baru" hint="Minimal 8 karakter."><PasswordInput required minLength={8} value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" /></Field>
         <button className="btn-primary w-full">Simpan</button>
       </form>
     </div>

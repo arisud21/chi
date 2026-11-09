@@ -53,8 +53,9 @@ export function Belajar() {
       <PageHeader title="Ruang belajar" />
       <div className="space-y-6">
         {learning.map((r) => {
-          const b = s.batches.find((x) => x.id === r.batchId)!
-          const p = s.programs.find((x) => x.id === b.programId)!
+          const b = s.batches.find((x) => x.id === r.batchId)
+          const p = s.programs.find((x) => x.id === r.programId)!
+          if (!b) return <Reveal key={r.id}><div className="card p-5"><p className="font-bold">{p.title}</p><p className="mt-1 text-sm text-muted">Pembayaran Anda sudah dikonfirmasi. Admin sedang menentukan angkatan Anda. Jadwal dan materi akan muncul di sini setelah angkatan ditetapkan.</p></div></Reveal>
           const g = s.grades.find((x) => x.registrationId === r.id)
           const sessions = s.sessions.filter((x) => x.batchId === b.id).sort((a, c) => a.startAt.localeCompare(c.startAt))
           const mats = s.materials.filter((x) => x.batchId === b.id)
@@ -105,11 +106,10 @@ export function SertifikatSaya() {
   const [view, setView] = useState<string | null>(null)
   const cert = certs.find((c) => c.id === view)
   const reg = cert && regs.find((r) => r.id === cert.registrationId)
-  const prog = reg && s.programs.find((p) => p.id === s.batches.find((b) => b.id === reg.batchId)!.programId)
+  const prog = reg && s.programs.find((p) => p.id === reg.programId)
   return (
     <>
       <PageHeader title="Sertifikat" sub="Unduh sertifikat setelah dinyatakan lulus." />
-      {!me.emailVerified && certs.length > 0 && <p className="mb-4 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">Email Anda belum terverifikasi, jadi sertifikat tidak dikirim lewat email. Unduhan di halaman ini tetap tersedia.</p>}
       {certs.length === 0 ? <div className="card"><Empty title="Belum ada sertifikat" body="Sertifikat terbit otomatis setelah Akademik memvalidasi kelulusan Anda." /></div> : (
         <div className="grid gap-3 md:grid-cols-2">
           {certs.map((c) => (

@@ -9,7 +9,8 @@ import helmet from 'helmet'
 import jwt from 'jsonwebtoken'
 import multer from 'multer'
 import sharp from 'sharp'
-import { actions, expireOverdue, registerForBatch } from './actions.js'
+import { actions, expireOverdue, registerForProgram } from './actions.js'
+import { REG_FEE_DEFAULT, afterProfileDone, remainingTotal, renderLetter } from './admission.js'
 import { HttpError, UPLOAD_DIR, audit, cq, dt, fail, getSettings, iso, mail, q, saveUpload, tx, uid } from './lib.js'
 import { processQueue } from './mailer.js'
 import { DEFAULT_CONFIG, certificatePath, previewPdf, renderCertificatePdf, transcriptPdf } from './pdf.js'
@@ -50,26 +51,44 @@ const publicLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: 
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
 const passwordOk = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 100
+const MAX_AGE = 30
+/** Usia penuh (tahun) pada hari ini, atau null bila tanggal tidak valid atau di masa depan. */
+const ageOn = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!m) return null
+  const [y, mo, d] = [+m[1], +m[2], +m[3]]
+  const t = new Date(Date.UTC(y, mo - 1, d))
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return null
+  const n = new Date()
+  let a = n.getUTCFullYear() - y
+  if (n.getUTCMonth() + 1 < mo || (n.getUTCMonth() + 1 === mo && n.getUTCDate() < d)) a--
+  return a < 0 ? null : a
+}
 
 /* ---------- auth ---------- */
 app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
-  const { name, email, phone, password, website, batchId } = req.body ?? {}
+  const { name, email, nik, birthDate, password, website, programId } = req.body ?? {}
   if (website) return res.json({ ok: true }) // honeypot untuk bot
   const em = String(email ?? '').trim().toLowerCase()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) fail('Format email tidak valid.')
   if (!String(name ?? '').trim()) fail('Nama wajib diisi.')
+  const nikV = String(nik ?? '').trim()
+  if (!/^\d{16}$/.test(nikV)) fail('NIK harus 16 digit angka.')
+  const bd = String(birthDate ?? '')
+  const age = ageOn(bd)
+  if (age == null || age < 14) fail('Tanggal lahir tidak valid.')
+  if (age > MAX_AGE) fail(`Pendaftaran hanya untuk usia maksimal ${MAX_AGE} tahun.`)
   if (!passwordOk(password)) fail('Password minimal 8 karakter.')
-  if (!batchId) fail('Pilih jenis pelatihan dan angkatan.')
+  if (!programId) fail('Pilih jenis pelatihan.')
   const id = uid()
   await tx(async (c) => {
     const [dup] = await cq(c, 'SELECT id FROM users WHERE email = ?', [em])
     if (dup) fail('Email sudah terdaftar.')
-    await cq(c, 'INSERT INTO users (id, name, email, phone, password_hash, role) VALUES (?,?,?,?,?,?)', [id, String(name).trim().slice(0, 120), em, String(phone ?? '').slice(0, 30), await bcrypt.hash(password, 10), 'peserta'])
-    const token = crypto.randomBytes(32).toString('hex')
-    await cq(c, "INSERT INTO email_tokens (token, user_id, kind, expires_at) VALUES (?,?,'verify',?)", [token, id, new Date(Date.now() + 3 * 86_400_000)])
-    await mail(c, em, 'Verifikasi email Anda', `Klik untuk memverifikasi email: ${APP_URL}/verifikasi-email?token=${token}`)
+    const [dupNik] = await cq(c, 'SELECT user_id FROM participant_profiles WHERE nik = ? UNION SELECT id FROM users WHERE nik = ?', [nikV, nikV])
+    if (dupNik) fail('NIK ini sudah terdaftar. Satu NIK hanya dapat dipakai untuk satu akun.')
+    await cq(c, 'INSERT INTO users (id, name, email, nik, birth_date, password_hash, role) VALUES (?,?,?,?,?,?,?)', [id, String(name).trim().slice(0, 120), em, nikV, bd, await bcrypt.hash(password, 10), 'peserta'])
     await audit(c, id, 'akun.daftar', 'users', em)
-    await registerForBatch(c, { id, email: em, name: String(name).trim() }, batchId) // pilihan pelatihan jadi tagihan saat itu juga
+    await registerForProgram(c, { id, email: em, name: String(name).trim() }, programId) // pilihan pelatihan jadi tagihan saat itu juga
   })
   setSession(res, id)
   res.json({ ok: true })
@@ -93,26 +112,9 @@ app.post('/api/auth/login', authLimiter, wrap(async (req, res) => {
 
 app.post('/api/auth/logout', (_req, res) => { res.clearCookie('cih_session'); res.json({ ok: true }) })
 
-app.post('/api/auth/verify-email', authLimiter, wrap(async (req, res) => {
-  const [t] = await q("SELECT * FROM email_tokens WHERE token = ? AND kind = 'verify' AND used_at IS NULL AND expires_at > ?", [String(req.body?.token ?? ''), dt()])
-  if (!t) fail('Tautan verifikasi tidak valid atau sudah kedaluwarsa.')
-  await q('UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?', [dt(), t.user_id])
-  await q('UPDATE email_tokens SET used_at = ? WHERE token = ?', [dt(), t.token])
-  res.json({ ok: true })
-}))
-
-app.post('/api/auth/resend-verification', authLimiter, wrap(async (req, res) => {
-  const u = needUser(req)
-  if (u.email_verified_at) fail('Email sudah terverifikasi.')
-  const token = crypto.randomBytes(32).toString('hex')
-  await q("INSERT INTO email_tokens (token, user_id, kind, expires_at) VALUES (?,?,'verify',?)", [token, u.id, new Date(Date.now() + 3 * 86_400_000)])
-  await q('INSERT INTO email_queue (to_email, subject, body) VALUES (?,?,?)', [u.email, 'Verifikasi email Anda', `Klik untuk memverifikasi email: ${APP_URL}/verifikasi-email?token=${token}`])
-  res.json({ ok: true })
-}))
-
-// AUTH-5: reset password hanya untuk email terverifikasi. Respons selalu sama agar email tidak bisa ditebak.
+// Email hanya dipakai untuk reset password. Respons selalu sama agar email tidak bisa ditebak.
 app.post('/api/auth/forgot', authLimiter, wrap(async (req, res) => {
-  const [u] = await q('SELECT * FROM users WHERE email = ? AND email_verified_at IS NOT NULL AND is_active = 1', [String(req.body?.email ?? '').trim().toLowerCase()])
+  const [u] = await q('SELECT * FROM users WHERE email = ? AND is_active = 1', [String(req.body?.email ?? '').trim().toLowerCase()])
   if (u) {
     const token = crypto.randomBytes(32).toString('hex')
     await q("INSERT INTO email_tokens (token, user_id, kind, expires_at) VALUES (?,?,'reset',?)", [token, u.id, new Date(Date.now() + 3_600_000)])
@@ -159,17 +161,45 @@ app.post('/api/upload/proof/:regId', upload.single('file'), wrap(async (req, res
   const b = req.body
   const [r] = await q('SELECT * FROM registrations WHERE id = ?', [req.params.regId])
   if (!r || r.user_id !== u.id) fail('Registrasi tidak ditemukan.', 404)
-  if (r.status !== 'pending_payment') fail('Registrasi tidak menunggu pembayaran.')
-  if (new Date(r.due_at) < new Date()) fail('Batas pembayaran sudah lewat.')
+  if (!['pending_payment', 'active'].includes(r.status)) fail('Registrasi ini sudah tidak berjalan.')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(b.transferDate ?? '')) fail('Tanggal transfer tidak valid.')
   const paid = Number(b.amountPaid)
   if (!Number.isFinite(paid) || paid <= 0) fail('Nominal tidak valid.')
+  const s = await getSettings()
+  const kind = ['pendaftaran', 'registrasi_ulang', 'cicilan'].includes(b.kind) ? b.kind : ''
+  let due, inst = null
+  if (kind === 'pendaftaran') {
+    if (r.stage !== 'bayar_daftar') fail(r.stage === 'data' ? 'Lengkapi data diri dulu sebelum membayar pendaftaran.' : 'Biaya pendaftaran sudah dibayar.')
+    due = Number(s.regFee ?? REG_FEE_DEFAULT)
+  } else if (kind === 'registrasi_ulang') {
+    if (r.stage !== 'registrasi_ulang') fail('Registrasi ulang dibuka setelah Anda dinyatakan lulus.')
+    if (s.reenrollDue && new Date(s.reenrollDue + 'T23:59:59Z') < new Date()) fail('Batas registrasi ulang sudah lewat.')
+    ;[inst] = await q('SELECT * FROM installments WHERE registration_id = ? AND seq = 1', [r.id])
+    if (!inst) fail('Pilih paket pembayaran dulu.')
+    if (inst.status !== 'unpaid') fail('Pembayaran ini sudah diunggah atau dikonfirmasi.')
+    due = Number(inst.amount)
+  } else if (kind === 'cicilan') {
+    ;[inst] = await q('SELECT * FROM installments WHERE id = ? AND registration_id = ?', [String(b.installmentId ?? ''), r.id])
+    if (!inst || r.stage !== 'aktif') fail('Cicilan tidak ditemukan.')
+    if (!['unpaid', 'partial'].includes(inst.status)) fail('Cicilan ini sudah lunas atau menunggu konfirmasi.')
+    due = Number(inst.amount) - Number(inst.paid_amount)
+  } else fail('Jenis pembayaran tidak dikenal.')
+  if (inst) { // satu bukti menunggu pada satu waktu, dan nominal tidak boleh melebihi seluruh sisa tagihan
+    const [pend] = await q("SELECT id FROM payments WHERE registration_id = ? AND installment_id IS NOT NULL AND status = 'submitted' LIMIT 1", [r.id])
+    if (pend) fail('Bukti sebelumnya masih menunggu konfirmasi.')
+    const rest = await remainingTotal(null, r.id)
+    if (paid > rest) fail(`Nominal melebihi sisa tagihan (Rp${rest.toLocaleString('id-ID')}).`)
+  }
+  if (kind === 'pendaftaran') {
+    const [pending] = await q("SELECT id FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'submitted'", [r.id])
+    if (pending) fail('Bukti sebelumnya masih menunggu konfirmasi.')
+  }
   const fileId = await saveUpload(req.file, { kind: 'proof', ownerId: u.id, allowed: PROOF })
   await tx(async (c) => {
-    await cq(c, "UPDATE registrations SET status = 'waiting_verification' WHERE id = ?", [r.id])
-    await cq(c, 'INSERT INTO payments (id, registration_id, amount_due, amount_paid, payer_name, transfer_date, proof_file_id) VALUES (?,?,?,?,?,?,?)',
-      [uid(), r.id, Number(r.price_snapshot) + r.unique_code, paid, String(b.payerName ?? u.name).slice(0, 120), b.transferDate, fileId])
-    await audit(c, u.id, 'pembayaran.unggah', 'payments', r.invoice_no)
+    if (inst) await cq(c, "UPDATE installments SET status = 'submitted' WHERE id = ?", [inst.id])
+    await cq(c, 'INSERT INTO payments (id, registration_id, kind, installment_id, amount_due, amount_paid, payer_name, transfer_date, proof_file_id) VALUES (?,?,?,?,?,?,?,?,?)',
+      [uid(), r.id, kind, inst?.id ?? null, due, paid, String(b.payerName ?? u.name).slice(0, 120), b.transferDate, fileId])
+    await audit(c, u.id, 'pembayaran.unggah', 'payments', `${r.invoice_no} ${kind}`)
   })
   res.json({ ok: true })
 }))
@@ -244,11 +274,10 @@ const EDU = ['SD', 'SMP', 'SMA/SMK', 'D3', 'S1', 'S2', 'Lainnya']
 const text = (v, label, max = 255) => { const t = String(v ?? '').trim(); if (!t) fail(`${label} wajib diisi.`); return t.slice(0, max) }
 const phoneOk = (v, label) => { const t = String(v ?? '').replace(/[\s-]/g, ''); if (!/^(\+62|62|0)\d{8,13}$/.test(t)) fail(`${label} tidak valid. Contoh: 081234567890.`); return t }
 
-app.post('/api/upload/profile', upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'ktp', maxCount: 1 }]), wrap(async (req, res) => {
-  const u = needRole(req, ['peserta'])
-  const [paid] = await q("SELECT id FROM registrations WHERE user_id = ? AND status IN ('active','completed') LIMIT 1", [u.id])
-  if (!paid) fail('Data diri dapat diisi setelah pembayaran Anda dikonfirmasi.', 403)
-  const b = req.body
+/** Simpan data diri satu peserta. Admin boleh mengoreksi NIK dan tanggal lahir, peserta tidak. */
+async function processProfile(u, b, actor, byStaff) {
+  const [reg] = await q("SELECT id FROM registrations WHERE user_id = ? AND status IN ('pending_payment','active','completed') LIMIT 1", [u.id])
+  if (!reg) fail('Lakukan registrasi pelatihan dulu sebelum mengisi data diri.', 403)
   const fullName = text(b.fullName, 'Nama lengkap', 120)
   const nik = String(b.nik ?? '').trim()
   if (!/^\d{16}$/.test(nik)) fail('NIK harus 16 digit angka.')
@@ -256,6 +285,8 @@ app.post('/api/upload/profile', upload.fields([{ name: 'photo', maxCount: 1 }, {
   const bd = new Date(birthDate + 'T00:00:00Z')
   const age = (Date.now() - bd.getTime()) / (365.25 * 86_400_000)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || Number.isNaN(bd.getTime()) || age < 14 || age > 90) fail('Tanggal lahir tidak valid (usia 14 sampai 90 tahun).')
+  if (!byStaff && u.nik && u.nik !== nik) fail('NIK tidak boleh berbeda dari yang dipakai saat mendaftar.')
+  if (!byStaff && u.birth_date && u.birth_date !== birthDate) fail('Tanggal lahir tidak boleh berbeda dari yang dipakai saat mendaftar.')
   if (!['L', 'P'].includes(b.gender)) fail('Pilih jenis kelamin.')
   if (!/^\d{5}$/.test(String(b.postalCode ?? '').trim())) fail('Kode pos harus 5 digit.')
   if (!EDU.includes(b.education)) fail('Pilih pendidikan terakhir.')
@@ -264,26 +295,74 @@ app.post('/api/upload/profile', upload.fields([{ name: 'photo', maxCount: 1 }, {
   const area = wilayah.resolveArea(String(b.provinceId ?? ''), String(b.cityId ?? ''), String(b.districtId ?? ''))
   if (area.error) fail(area.error)
   const phone = phoneOk(b.phone, 'Nomor telepon')
-  const emergencyPhone = phoneOk(b.emergencyPhone, 'Nomor kontak darurat')
-  const [dupe] = await q('SELECT user_id FROM participant_profiles WHERE nik = ? AND user_id <> ?', [nik, u.id])
+  const [dupe] = await q('SELECT user_id FROM participant_profiles WHERE nik = ? AND user_id <> ? UNION SELECT id FROM users WHERE nik = ? AND id <> ?', [nik, u.id, nik, u.id])
   if (dupe) fail('NIK ini sudah terdaftar pada akun lain. Hubungi admin bila ini keliru.')
   const [old] = await q('SELECT * FROM participant_profiles WHERE user_id = ?', [u.id])
-  const photoId = req.files?.photo?.[0] ? await saveUpload(req.files.photo[0], { kind: 'profile', ownerId: u.id, allowed: ['image/jpeg', 'image/png'] }) : old?.photo_file_id
-  const ktpId = req.files?.ktp?.[0] ? await saveUpload(req.files.ktp[0], { kind: 'profile', ownerId: u.id, allowed: ['image/jpeg', 'image/png', 'application/pdf'] }) : old?.ktp_file_id
-  if (!photoId) fail('Unggah pas foto (JPG atau PNG).')
-  if (!ktpId) fail('Unggah scan KTP (JPG, PNG, atau PDF).')
   await tx(async (c) => {
-    await cq(c, `INSERT INTO participant_profiles (user_id, nik, birth_place, birth_date, gender, address, rt, rw, district_id, district, city_id, city, province_id, province, postal_code, education, occupation, emergency_name, emergency_relation, emergency_phone, photo_file_id, ktp_file_id, completed_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    await cq(c, `INSERT INTO participant_profiles (user_id, nik, birth_place, birth_date, gender, address, rt, rw, district_id, district, city_id, city, province_id, province, postal_code, education, occupation, school, completed_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON DUPLICATE KEY UPDATE nik=VALUES(nik), birth_place=VALUES(birth_place), birth_date=VALUES(birth_date), gender=VALUES(gender), address=VALUES(address), rt=VALUES(rt), rw=VALUES(rw), district_id=VALUES(district_id), district=VALUES(district), city_id=VALUES(city_id), city=VALUES(city), province_id=VALUES(province_id), province=VALUES(province),
-        postal_code=VALUES(postal_code), education=VALUES(education), occupation=VALUES(occupation), emergency_name=VALUES(emergency_name), emergency_relation=VALUES(emergency_relation),
-        emergency_phone=VALUES(emergency_phone), photo_file_id=VALUES(photo_file_id), ktp_file_id=VALUES(ktp_file_id), completed_at=COALESCE(completed_at, VALUES(completed_at)), updated_at=CURRENT_TIMESTAMP`,
+        postal_code=VALUES(postal_code), education=VALUES(education), occupation=VALUES(occupation),
+        school=VALUES(school), completed_at=COALESCE(completed_at, VALUES(completed_at)), updated_at=CURRENT_TIMESTAMP`,
       [u.id, nik, text(b.birthPlace, 'Tempat lahir', 80), birthDate, b.gender, text(b.address, 'Alamat', 255), rt, rw, String(b.districtId), area.district, String(b.cityId), area.city, String(b.provinceId), area.province, String(b.postalCode).trim(),
-        b.education, text(b.occupation, 'Pekerjaan', 80), text(b.emergencyName, 'Nama kontak darurat', 120), text(b.emergencyRelation, 'Hubungan kontak darurat', 40), emergencyPhone, photoId, ktpId, dt()])
-    await cq(c, 'UPDATE users SET name = ?, phone = ? WHERE id = ?', [fullName, phone, u.id]) // nama sesuai KTP dipakai di sertifikat
-    await audit(c, u.id, old?.completed_at ? 'data-diri.ubah' : 'data-diri.lengkap', 'participant_profiles', u.email)
+        b.education, text(b.occupation, 'Pekerjaan', 80), text(b.school, 'Asal sekolah', 160), dt()])
+    await cq(c, 'UPDATE users SET name = ?, phone = ?, nik = ?, birth_date = ? WHERE id = ?', [fullName, phone, nik, birthDate, u.id]) // nama sesuai KTP dipakai di sertifikat
+    await audit(c, actor.id, byStaff ? 'data-diri.ubah-admin' : old?.completed_at ? 'data-diri.ubah' : 'data-diri.lengkap', 'participant_profiles', u.email)
+    if (!old?.completed_at) await afterProfileDone(c, u.id)
+  })
+}
+
+app.post('/api/upload/profile', upload.none(), wrap(async (req, res) => {
+  const u = needRole(req, ['peserta'])
+  const [locked] = await q("SELECT id FROM registrations WHERE user_id = ? AND stage = 'aktif' LIMIT 1", [u.id])
+  if (locked) fail('Data diri terkunci setelah registrasi ulang. Hubungi admin pendaftaran untuk perubahan.', 403)
+  await processProfile(u, req.body, u, false)
+  res.json({ ok: true })
+}))
+
+// Admin pendaftaran mengoreksi data diri peserta kapan saja, termasuk setelah registrasi ulang.
+app.post('/api/admin/profile/:userId', upload.none(), wrap(async (req, res) => {
+  const actor = needRole(req, ['super_admin', 'admin_pendaftaran'])
+  const [u] = await q("SELECT * FROM users WHERE id = ? AND role = 'peserta'", [req.params.userId])
+  if (!u) fail('Peserta tidak ditemukan.', 404)
+  await processProfile(u, req.body, actor, true)
+  res.json({ ok: true })
+}))
+
+/** Berkas registrasi ulang. Hanya diunggah setelah registrasi ulang dikonfirmasi (tahap aktif). */
+const DOC_IMG_PDF = ['image/jpeg', 'image/png', 'application/pdf']
+const DOC_KINDS = { ktp: DOC_IMG_PDF, ijazah: DOC_IMG_PDF, foto: ['image/jpeg', 'image/png'], kk: DOC_IMG_PDF, buta_warna: DOC_IMG_PDF }
+app.post('/api/upload/document/:kind', upload.single('file'), wrap(async (req, res) => {
+  const u = needRole(req, ['peserta'])
+  const allowed = DOC_KINDS[req.params.kind]
+  if (!allowed) fail('Jenis berkas tidak dikenal.', 404)
+  const [r] = await q("SELECT id FROM registrations WHERE user_id = ? AND stage = 'aktif' AND status = 'active' LIMIT 1", [u.id])
+  if (!r) fail('Berkas diunggah setelah registrasi ulang Anda dikonfirmasi.', 403)
+  if (!req.file) fail('Pilih berkas yang akan diunggah.')
+  const [old] = await q('SELECT id FROM registration_documents WHERE user_id = ? AND kind = ?', [u.id, req.params.kind])
+  if (old) fail('Berkas ini sudah diunggah. Hubungi admin pendaftaran bila perlu diganti.', 403)
+  const fileId = await saveUpload(req.file, { kind: 'document', ownerId: u.id, allowed })
+  await tx(async (c) => {
+    await cq(c, 'INSERT INTO registration_documents (id, user_id, kind, file_id) VALUES (?,?,?,?)', [uid(), u.id, req.params.kind, fileId])
+    await audit(c, u.id, 'berkas.unggah', 'registration_documents', req.params.kind)
   })
   res.json({ ok: true })
+}))
+
+/** Baca spreadsheet Google yang dibagikan publik sebagai CSV. Hanya docs.google.com, tautan dibentuk ulang dari id dan gid. */
+app.post('/api/subjects/sheet', wrap(async (req, res) => {
+  needRole(req, ['akademik', 'super_admin'])
+  const m = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([A-Za-z0-9_-]{20,80})/.exec(String(req.body?.url ?? '').trim())
+  if (!m) fail('Tempel tautan Google Sheets (https://docs.google.com/spreadsheets/d/...).')
+  const gid = /[?#&]gid=(\d{1,12})/.exec(String(req.body.url))?.[1]
+  const src = `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv${gid ? `&gid=${gid}` : ''}`
+  let r
+  try { r = await fetch(src, { signal: AbortSignal.timeout(15_000), redirect: 'follow' }) } catch { fail('Spreadsheet tidak bisa dijangkau. Coba lagi sebentar lagi.', 502) }
+  const type = r.headers.get('content-type') ?? ''
+  if (!r.ok || !type.includes('csv')) fail('Spreadsheet tidak bisa dibaca. Pastikan dibagikan dengan akses "Siapa saja yang memiliki link" (Pelihat).')
+  const text = await r.text()
+  if (text.length > 1_000_000) fail('Spreadsheet terlalu besar.')
+  res.json({ ok: true, data: text })
 }))
 
 /* ---------- unduhan ---------- */
@@ -295,6 +374,7 @@ async function canReadFile(user, f) {
     if (['super_admin', 'admin_keuangan', 'admin_pendaftaran'].includes(user.role)) return true
     return f.owner_id === user.id
   }
+  if (f.kind === 'document') return f.owner_id === user.id || ['super_admin', 'admin_pendaftaran', 'akademik'].includes(user.role)
   if (f.kind === 'profile') return f.owner_id === user.id || ['super_admin', 'admin_pendaftaran', 'akademik'].includes(user.role)
   if (f.kind === 'submission') return f.owner_id === user.id || ['super_admin', 'akademik', 'instruktur'].includes(user.role)
   if (f.kind === 'template') return ['super_admin', 'akademik'].includes(user.role)
@@ -328,6 +408,14 @@ app.get('/api/certificates/:id/pdf', wrap(async (req, res) => {
   if (c.status === 'revoked' && own) fail('Sertifikat ini telah dicabut.', 403)
   if (!fs.existsSync(certificatePath(c.id))) await renderCertificatePdf(c.id)
   res.type('application/pdf').set('Content-Disposition', `inline; filename="sertifikat-${c.verification_code}.pdf"`).sendFile(certificatePath(c.id))
+}))
+app.get('/api/surat/:regId/pdf', wrap(async (req, res) => {
+  const u = needUser(req)
+  const [r] = await q('SELECT user_id, admission_no FROM registrations WHERE id = ?', [req.params.regId])
+  if (!r || !r.admission_no) fail('Surat belum tersedia.', 404)
+  if (u.role === 'peserta' ? r.user_id !== u.id : u.role === 'instruktur') fail('Tidak berhak.', 403)
+  res.type('application/pdf').set('Content-Disposition', 'inline; filename="surat-kelulusan.pdf"')
+  await renderLetter(res, req.params.regId)
 }))
 app.get('/api/transcripts/:regId/pdf', wrap(async (req, res) => {
   const u = needUser(req)

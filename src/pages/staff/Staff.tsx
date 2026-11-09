@@ -1,25 +1,14 @@
 import { IconArrowRight, IconCheck, IconPlus, IconPrinter, IconX } from '@tabler/icons-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CertificateView } from '../../components/Certificate'
 import { PengumumanForm } from './Akademik'
-import { Badge, CountUp, Empty, Field, Modal, PageHeader, Reveal, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
+import { Badge, CountUp, KIND_LABEL, Table, Empty, Field, Modal, PageHeader, Reveal, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
 import {
   archiveProgram, deleteBatch, deleteProgram, finalScore, getState, issueCertificate, newId, recommendPass, rejectPayment, returnGrade,
   revokeCertificate, saveBatch, saveGrade, saveProgram, saveSettings, saveUser, seatsTaken, submitGrade, useStore, validateGrade, verifyPayment,
 } from '../../lib/store'
 import { ROLE_LABEL, type Batch, type Program, type Role, type User } from '../../lib/types'
-
-function Table({ head, children }: { head: string[]; children: ReactNode }) {
-  return (
-    <div className="card overflow-x-auto">
-      <table className="w-full min-w-[640px] text-left text-sm">
-        <thead><tr className="border-b border-line bg-canvas text-xs uppercase tracking-wide text-muted">{head.map((h) => <th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
-        <tbody className="[&>tr]:border-b [&>tr]:border-line [&>tr:last-child]:border-0 [&>tr]:transition-colors [&>tr:hover]:bg-brand-50/50 [&_td]:px-4 [&_td]:py-3">{children}</tbody>
-      </table>
-    </div>
-  )
-}
 
 /** Input nilai dengan buffer lokal; disimpan ke server saat kehilangan fokus. */
 function GradeInput({ label, value, disabled, onSave }: { label: string; value: number; disabled: boolean; onSave: (v: number) => void }) {
@@ -37,17 +26,20 @@ export function Dashboard() {
   const toFill = s.grades.filter((g) => g.status === 'draft' && s.registrations.find((r) => r.id === g.registrationId)?.status === 'active').length
   const toValidate = s.grades.filter((g) => g.status === 'submitted').length
   const toIssue = s.grades.filter((g) => g.status === 'validated' && g.passed && !s.certificates.some((c) => c.registrationId === g.registrationId)).length
-  const awaitingProfile = s.registrations.filter((r) => r.status === 'active' && !s.users.find((u) => u.id === r.userId)?.profileDone).length
+  const awaitingDecision = s.registrations.filter((r) => r.stage === 'menunggu_hasil').length
+  const awaitingReenroll = s.registrations.filter((r) => r.stage === 'registrasi_ulang' && r.status === 'pending_payment').length
   const openBatches = s.batches.filter((b) => b.status === 'open')
-  const statuses = ['pending_payment', 'waiting_verification', 'active', 'completed', 'expired', 'cancelled'] as const
-  const counts = statuses.map((k) => [k, s.registrations.filter((r) => r.status === k).length] as const)
+  // Tahapan penerimaan, lalu hasil akhirnya. Peserta aktif dihitung dari tahap aktif.
+  const statuses = ['data', 'bayar_daftar', 'ujian', 'menunggu_hasil', 'registrasi_ulang', 'aktif', 'tidak_lulus'] as const
+  const counts = statuses.map((k) => [k, s.registrations.filter((r) => r.stage === k && r.status !== 'expired' && (k === 'tidak_lulus' || r.status !== 'cancelled')).length] as const)
   const max = Math.max(1, ...counts.map((c) => c[1]))
   const revenue = s.payments.filter((p) => p.status === 'verified').reduce((a, p) => a + p.amountPaid, 0)
 
   const R = (...a: Role[]) => a
   const todo: { role: Role[]; to: string; n: number; label: string }[] = [
     { role: R('super_admin', 'admin_keuangan'), to: '/admin/pembayaran', n: queue, label: 'bukti pembayaran menunggu verifikasi' },
-    { role: R('super_admin', 'admin_pendaftaran'), to: '/admin/pendaftar', n: awaitingProfile, label: 'peserta sudah bayar tetapi belum mengisi data diri' },
+    { role: R('super_admin', 'admin_pendaftaran', 'akademik'), to: '/admin/ujian', n: awaitingDecision, label: 'pendaftar selesai ujian dan menunggu keputusan lulus' },
+    { role: R('super_admin', 'admin_pendaftaran'), to: '/admin/pendaftar', n: awaitingReenroll, label: 'pendaftar lulus yang belum registrasi ulang' },
     { role: R('super_admin', 'instruktur'), to: '/admin/nilai', n: toFill, label: 'nilai peserta perlu diisi' },
     { role: R('super_admin', 'akademik'), to: '/admin/nilai', n: toValidate, label: 'nilai menunggu validasi' },
     { role: R('super_admin', 'akademik'), to: '/admin/sertifikat', n: toIssue, label: 'peserta lulus belum diterbitkan sertifikatnya' },
@@ -70,8 +62,8 @@ export function Dashboard() {
           </ul>
         </section>
         <section className="card p-5 lg:col-span-2">
-          <h2 className="font-bold">Pendaftaran menurut status</h2>
-          <p className="text-sm text-muted">Jumlah registrasi per status saat ini.</p>
+          <h2 className="font-bold">Pendaftar menurut tahap</h2>
+          <p className="text-sm text-muted">Jumlah registrasi di tiap tahap penerimaan saat ini.</p>
           <div className="mt-5 space-y-3">
             {counts.map(([k, n], i) => (
               <div key={k} className="grid grid-cols-[9rem_1fr_2rem] items-center gap-3 text-sm">
@@ -111,8 +103,8 @@ export function ProgramAdmin() {
   const [prog, setProg] = useState<Program | null>(null)
   const [batch, setBatch] = useState<Batch | null>(null)
   const [del, setDel] = useState<{ kind: 'program' | 'batch'; id: string; label: string } | null>(null)
-  const blankProg = (): Program => ({ id: newId('pr'), slug: '', title: '', category: 'Hospitality', shortDesc: '', description: '', durationHours: 60, price: 0, active: true, archived: false, rules: { theoryWeight: 30, practicalWeight: 70, passingScore: 70, minAttendance: 80 } })
-  const blankBatch = (): Batch => ({ id: newId('b'), programId: s.programs[0]?.id ?? '', code: '', startDate: '', endDate: '', quota: 20, status: 'draft', instructorId: s.users.find((u) => u.role === 'instruktur')?.id ?? '', location: '', scheduleDays: '', startTime: '', endTime: '', plannedSessions: 0 })
+  const blankProg = (): Program => ({ id: newId('pr'), slug: '', title: '', category: 'Hospitality', shortDesc: '', description: '', durationHours: 60, price: 0, active: true, archived: false, nipCode: null, rules: { theoryWeight: 30, practicalWeight: 70, passingScore: 70, minAttendance: 80 } })
+  const blankBatch = (): Batch => ({ id: newId('b'), programId: s.programs[0]?.id ?? '', code: '', startDate: '', endDate: '', quota: 20, status: 'draft', instructorId: s.users.find((u) => u.role === 'instruktur')?.id ?? '', location: '', scheduleDays: '', startTime: '', endTime: '', plannedSessions: 0, angkatan: null })
   return (
     <>
       <PageHeader title="Program dan angkatan" sub="Program yang sudah punya angkatan tidak dihapus, hanya diarsipkan." action={<div className="flex gap-2"><button className="btn-ghost" onClick={() => setBatch(blankBatch())}><IconPlus size={18} />Angkatan</button><button className="btn-primary" onClick={() => setProg(blankProg())}><IconPlus size={18} />Program</button></div>} />
@@ -150,7 +142,10 @@ export function ProgramAdmin() {
             <Field label="Kategori"><input className="input" required value={prog.category} onChange={(e) => setProg({ ...prog, category: e.target.value })} /></Field>
             <Field label="Durasi (jam)"><input className="input" type="number" min={1} required value={prog.durationHours} onChange={(e) => setProg({ ...prog, durationHours: +e.target.value })} /></Field>
           </div>
-          <Field label="Harga (Rp)"><input className="input" type="number" min={0} required value={prog.price} onChange={(e) => setProg({ ...prog, price: +e.target.value })} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Harga (Rp)"><input className="input" type="number" min={0} required value={prog.price} onChange={(e) => setProg({ ...prog, price: +e.target.value })} /></Field>
+            <Field label="Kode NIP (1 sampai 9)" hint="Satu digit di NIP, misalnya 1 untuk FB dan 2 untuk RD."><input className="input" type="number" min={1} max={9} required value={prog.nipCode ?? ''} onChange={(e) => setProg({ ...prog, nipCode: e.target.value === '' ? null : +e.target.value })} /></Field>
+          </div>
           <Field label="Ringkasan"><input className="input" required maxLength={120} value={prog.shortDesc} onChange={(e) => setProg({ ...prog, shortDesc: e.target.value })} /></Field>
           <Field label="Deskripsi"><textarea className="input !py-2" rows={3} value={prog.description} onChange={(e) => setProg({ ...prog, description: e.target.value })} /></Field>
           <p className="pt-1 text-sm font-bold">Aturan penilaian</p>
@@ -170,6 +165,8 @@ export function ProgramAdmin() {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Kode"><input className="input" required value={batch.code} onChange={(e) => setBatch({ ...batch, code: e.target.value })} /></Field>
             <Field label="Kuota"><input className="input" type="number" min={1} required value={batch.quota} onChange={(e) => setBatch({ ...batch, quota: +e.target.value })} /></Field>
+            <Field label="Angkatan ke- (1 sampai 9)" hint="Satu digit di NIP."><input className="input" type="number" min={1} max={9} required value={batch.angkatan ?? ''} onChange={(e) => setBatch({ ...batch, angkatan: e.target.value === '' ? null : +e.target.value })} /></Field>
+            <span aria-hidden />
             <Field label="Mulai"><input className="input" type="date" required value={batch.startDate} onChange={(e) => setBatch({ ...batch, startDate: e.target.value })} /></Field>
             <Field label="Selesai"><input className="input" type="date" required value={batch.endDate} onChange={(e) => setBatch({ ...batch, endDate: e.target.value })} /></Field>
           </div>
@@ -192,7 +189,7 @@ export function Pembayaran() {
   const done = s.payments.filter((p) => p.status !== 'submitted').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   return (
     <>
-      <PageHeader title="Verifikasi pembayaran" sub="Setujui dalam satu aksi: pembayaran, registrasi, kwitansi, dan audit log tercatat bersama." />
+      <PageHeader title="Verifikasi pembayaran" sub="Konfirmasi pembayaran pendaftaran, registrasi ulang, dan cicilan. Peserta menerima notifikasi di aplikasi dan email." />
       {queue.length === 0 ? <div className="card mb-8"><Empty title="Antrean kosong" body="Semua bukti pembayaran sudah diperiksa." /></div> : (
         <div className="mb-8 grid gap-4 lg:grid-cols-2">
           {queue.map((p) => {
@@ -200,15 +197,17 @@ export function Pembayaran() {
             const diff = p.amountPaid - p.amountDue
             return (
               <Reveal key={p.id}><div className="card p-5">
-                <div className="flex items-start justify-between"><div><p className="font-bold">{s.users.find((u) => u.id === r.userId)?.name}</p><p className="text-sm text-muted">{r.invoiceNo} · {s.batches.find((b) => b.id === r.batchId)?.code}</p></div><Badge status={p.status} /></div>
+                <div className="flex items-start justify-between"><div><p className="font-bold">{s.users.find((u) => u.id === r.userId)?.name}</p><p className="text-sm text-muted">{KIND_LABEL[p.kind]} · {r.invoiceNo} · {s.batches.find((b) => b.id === r.batchId)?.code ?? s.programs.find((p) => p.id === r.programId)?.title}</p></div><Badge status={p.status} /></div>
                 <dl className="mt-4 grid grid-cols-3 gap-3 text-sm">
                   <div><dt className="text-muted">Tagihan</dt><dd className="font-semibold">{rupiah(p.amountDue)}</dd></div>
                   <div><dt className="text-muted">Dibayar</dt><dd className="font-semibold">{rupiah(p.amountPaid)}</dd></div>
-                  <div><dt className="text-muted">Selisih</dt><dd className={`font-semibold ${diff === 0 ? 'text-emerald-700' : 'text-red-700'}`}>{diff === 0 ? 'Cocok' : rupiah(diff)}</dd></div>
+                  <div><dt className="text-muted">Selisih</dt><dd className={`font-semibold ${diff === 0 ? 'text-emerald-700' : p.kind === 'pendaftaran' ? 'text-red-700' : diff < 0 ? 'text-amber-800' : 'text-sky-800'}`}>{diff === 0 ? 'Cocok' : p.kind !== 'pendaftaran' ? `${diff < 0 ? 'Kurang' : 'Lebih'} ${rupiah(Math.abs(diff))}` : rupiah(diff)}</dd></div>
                 </dl>
+                {p.kind !== 'pendaftaran' && diff < 0 && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">Pembayaran kurang tetap bisa disetujui. Peserta langsung mendapat pemberitahuan untuk segera melunasi kekurangannya.</p>}
+                {p.kind !== 'pendaftaran' && diff > 0 && <p className="mt-2 rounded-lg bg-sky-50 p-2 text-xs text-sky-900">Kelebihan otomatis memotong cicilan berikutnya saat disetujui.</p>}
                 <p className="mt-3 text-sm text-muted">Pengirim {p.payerName} · transfer {dateID(p.transferDate)} · {p.proofFileId ? <a className="font-semibold text-brand-600 underline" href={`/api/files/${p.proofFileId}`} target="_blank" rel="noreferrer">lihat bukti</a> : 'tanpa berkas'}</p>
                 <div className="mt-4 flex gap-2">
-                  <button className="btn-primary" onClick={() => act(verifyPayment(p.id), 'Pembayaran disetujui. Kwitansi masuk antrean email.')}><IconCheck size={18} />Setujui</button>
+                  <button className="btn-primary" onClick={() => act(verifyPayment(p.id), 'Pembayaran dikonfirmasi. Peserta mendapat notifikasi dan email.')}><IconCheck size={18} />Setujui</button>
                   <button className="btn-ghost" onClick={() => { setRej(p.id); setReason('') }}><IconX size={18} />Tolak</button>
                 </div>
               </div></Reveal>
@@ -243,8 +242,8 @@ export function Nilai() {
   const rows = s.grades.map((g) => {
     const r = s.registrations.find((x) => x.id === g.registrationId)!
     const b = s.batches.find((x) => x.id === r.batchId)!
-    return { g, r, b, p: s.programs.find((x) => x.id === b.programId)!, u: s.users.find((x) => x.id === r.userId)! }
-  }).filter((x) => x.r.status === 'active' || x.r.status === 'completed').filter((x) => me.role !== 'instruktur' || x.b.instructorId === me.id)
+    return { g, r, b, p: s.programs.find((x) => x.id === r.programId)!, u: s.users.find((x) => x.id === r.userId)! }
+  })  .filter((x) => x.b && (x.r.status === 'active' || x.r.status === 'completed')).filter((x) => me.role !== 'instruktur' || x.b.instructorId === me.id)
   const quiet = (p: Promise<{ ok: boolean }>) => p.then((r: any) => { if (!r.ok) toast(r.error, 'err') })
   const run = (p: Parameters<typeof act>[0], okMsg: string) => act(p, okMsg)
   return (
@@ -296,7 +295,7 @@ export function SertifikatAdmin() {
   const eligible = s.grades.filter((g) => g.status === 'validated' && g.passed && !s.certificates.some((c) => c.registrationId === g.registrationId && c.status === 'issued'))
   const cert = s.certificates.find((c) => c.id === view)
   const reg = cert && s.registrations.find((r) => r.id === cert.registrationId)
-  const prog = reg && s.programs.find((p) => p.id === s.batches.find((b) => b.id === reg.batchId)!.programId)
+  const prog = reg && s.programs.find((p) => p.id === reg.programId)
   const owner = reg && s.users.find((u) => u.id === reg.userId)
   return (
     <>
@@ -331,7 +330,7 @@ export function Pengguna() {
   const staff = s.users.filter((x) => x.role !== 'peserta')
   return (
     <>
-      <PageHeader title="Pengguna staf" sub="Akun staf hanya dibuat Super Admin. Peserta mendaftar sendiri." action={<button className="btn-primary" onClick={() => { setPw(''); setU({ id: newId('u'), name: '', email: '', phone: '', role: 'instruktur', emailVerified: true, active: true }) }}><IconPlus size={18} />Staf baru</button>} />
+      <PageHeader title="Pengguna staf" sub="Akun staf hanya dibuat Super Admin. Peserta mendaftar sendiri." action={<button className="btn-primary" onClick={() => { setPw(''); setU({ id: newId('u'), name: '', email: '', phone: '', role: 'instruktur', active: true }) }}><IconPlus size={18} />Staf baru</button>} />
       <Table head={['Nama', 'Email', 'Role', 'Status', '']}>
         {staff.map((x) => <tr key={x.id}><td className="font-semibold">{x.name}</td><td>{x.email}</td><td>{ROLE_LABEL[x.role]}</td><td><Badge status={x.active ? 'open' : 'draft'} /></td><td className="text-right"><button className="btn-ghost !min-h-9" onClick={() => setU(x)}>Ubah</button></td></tr>)}
       </Table>

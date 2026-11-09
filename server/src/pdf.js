@@ -6,16 +6,16 @@ import { UPLOAD_DIR, getSettings, q } from './lib.js'
 
 export const DEFAULT_CONFIG = {
   fields: {
-    institution: { x: 50, y: 11, size: 13, color: '#976d27', align: 'center' },
-    title: { x: 50, y: 19, size: 34, color: '#1c2a2b', align: 'center' },
-    number: { x: 50, y: 30, size: 11, color: '#5b6b6c', align: 'center' },
-    intro: { x: 50, y: 40, size: 12, color: '#5b6b6c', align: 'center' },
-    name: { x: 50, y: 47, size: 34, color: '#0d4d4a', align: 'center' },
-    desc: { x: 50, y: 61, size: 13, color: '#1c2a2b', align: 'center' },
-    date: { x: 8, y: 80, size: 11, color: '#1c2a2b', align: 'left' },
-    signerTitle: { x: 50, y: 76, size: 11, color: '#1c2a2b', align: 'center' },
-    signerName: { x: 50, y: 88, size: 12, color: '#1c2a2b', align: 'center' },
-    code: { x: 92, y: 93, size: 9, color: '#5b6b6c', align: 'right' },
+    institution: { x: 50, y: 11, size: 13, color: '#395886', align: 'center' },
+    title: { x: 50, y: 19, size: 34, color: '#1d2a3d', align: 'center' },
+    number: { x: 50, y: 30, size: 11, color: '#5a6b82', align: 'center' },
+    intro: { x: 50, y: 40, size: 12, color: '#5a6b82', align: 'center' },
+    name: { x: 50, y: 47, size: 34, color: '#2c4568', align: 'center' },
+    desc: { x: 50, y: 61, size: 13, color: '#1d2a3d', align: 'center' },
+    date: { x: 8, y: 80, size: 11, color: '#1d2a3d', align: 'left' },
+    signerTitle: { x: 50, y: 76, size: 11, color: '#1d2a3d', align: 'center' },
+    signerName: { x: 50, y: 88, size: 12, color: '#1d2a3d', align: 'center' },
+    code: { x: 92, y: 93, size: 9, color: '#5a6b82', align: 'right' },
   },
   qr: { x: 86, y: 70, size: 64 },
   signature: { x: 50, y: 79, size: 90 },
@@ -46,8 +46,8 @@ export async function drawCertificate(doc, { cert, name, program, settings, conf
   const cfg = { ...DEFAULT_CONFIG, ...config, fields: { ...DEFAULT_CONFIG.fields, ...(config?.fields ?? {}) } }
   if (bgPath) doc.image(bgPath, 0, 0, { width: W, height: H })
   else {
-    doc.lineWidth(6).strokeColor('#b8893b').rect(18, 18, W - 36, H - 36).stroke()
-    doc.lineWidth(1).strokeColor('#b8893b').rect(28, 28, W - 56, H - 56).stroke()
+    doc.lineWidth(6).strokeColor('#628ecb').rect(18, 18, W - 36, H - 36).stroke()
+    doc.lineWidth(1).strokeColor('#628ecb').rect(28, 28, W - 56, H - 56).stroke()
   }
   const text = {
     institution: (settings.name ?? 'Cimahi Institute Hotel').toUpperCase(),
@@ -119,15 +119,15 @@ export async function transcriptPdf(res, regId) {
   const doc = new PDFDocument({ size: 'A4', margin: 56 })
   doc.pipe(res)
   doc.font('Times-Bold').fontSize(20).text(settings.name ?? 'Cimahi Institute Hotel', { align: 'center' })
-  doc.font('Helvetica').fontSize(12).fillColor('#5b6b6c').text('Transkrip Nilai Pelatihan', { align: 'center' }).moveDown(2)
-  doc.fillColor('#1c2a2b')
+  doc.font('Helvetica').fontSize(12).fillColor('#5a6b82').text('Transkrip Nilai Pelatihan', { align: 'center' }).moveDown(2)
+  doc.fillColor('#1d2a3d')
   const row = (k, v) => { doc.font('Helvetica').fontSize(11).text(k, 56, doc.y, { continued: true, width: 180 }).font('Helvetica-Bold').text(String(v), 240); doc.moveDown(0.4) }
   row('Nama', r.name); row('Program', p.title); row('Angkatan', r.bcode); row('Durasi', `${p.duration_hours} jam`)
   doc.moveDown()
   row(`Nilai teori (bobot ${p.theory_weight}%)`, Number(g.theory)); row(`Nilai praktik (bobot ${p.practical_weight}%)`, Number(g.practical))
   row('Kehadiran', `${Number(g.attendance_pct)}% (minimal ${p.min_attendance}%)`); row('Nilai akhir', `${fin} (batas lulus ${p.passing_score})`)
   row('Hasil', g.passed ? 'LULUS' : 'TIDAK LULUS')
-  doc.moveDown(2).font('Helvetica').fontSize(9).fillColor('#5b6b6c').text(`Dibuat otomatis oleh sistem pada ${dateID(new Date())}.`)
+  doc.moveDown(2).font('Helvetica').fontSize(9).fillColor('#5a6b82').text(`Dibuat otomatis oleh sistem pada ${dateID(new Date())}.`)
   doc.end()
   return true
 }

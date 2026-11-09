@@ -1,5 +1,6 @@
 // Mengosongkan SEMUA data pendaftar dan peserta untuk memulai uji dari awal. Tidak dapat dibatalkan.
-//   node --env-file=.env scripts/reset-peserta.mjs --yes
+//   node --env-file=.env scripts/reset-peserta.mjs --yes            (pendaftar dan peserta saja)
+//   node --env-file=.env scripts/reset-peserta.mjs --yes --katalog  (ditambah program, angkatan, jadwal, mapel, materi, tugas)
 //
 // Dihapus : akun peserta, registrasi, pembayaran, data diri, absensi, nilai, pengumpulan tugas, sertifikat (termasuk penghitung nomor),
 //           berkas unggahan peserta (bukti transfer, foto, KTP, tugas, PDF sertifikat), antrean email, audit log, token email.
@@ -15,12 +16,14 @@ if (!process.argv.includes('--yes')) {
 }
 if (process.env.NODE_ENV === 'production') throw new Error('Pengosongan data peserta tidak boleh dijalankan di produksi.')
 
+const katalog = process.argv.includes('--katalog')
 const count = async (sql) => Number((await q(sql))[0].n)
 const before = {
   peserta: await count("SELECT COUNT(*) n FROM users WHERE role = 'peserta'"),
   registrasi: await count('SELECT COUNT(*) n FROM registrations'),
   pembayaran: await count('SELECT COUNT(*) n FROM payments'),
   sertifikat: await count('SELECT COUNT(*) n FROM certificates'),
+  ...(katalog ? { program: await count('SELECT COUNT(*) n FROM programs'), angkatan: await count('SELECT COUNT(*) n FROM batches') } : {}),
 }
 
 const peserta = `(SELECT id FROM users WHERE role = 'peserta')`
@@ -29,8 +32,12 @@ const conn = await pool.getConnection()
 try {
   await conn.beginTransaction()
   const certs = (await conn.query('SELECT id FROM certificates'))[0].map((c) => c.id)
-  const files = (await conn.query(`SELECT id, stored_name FROM files WHERE owner_id IN ${peserta} AND kind IN ('proof','profile','submission')`))[0]
+  const files = (await conn.query(`SELECT id, stored_name FROM files WHERE owner_id IN ${peserta} AND kind IN ('proof','profile','submission','document')`))[0]
 
+  await conn.query('DELETE FROM registration_documents')
+  await conn.query('DELETE FROM exam_attempts')
+  await conn.query('DELETE FROM installments')
+  await conn.query('DELETE FROM notifications')
   await conn.query(`DELETE FROM submissions WHERE registration_id IN ${regs}`)
   await conn.query(`DELETE FROM attendances WHERE registration_id IN ${regs}`)
   await conn.query(`DELETE FROM grades WHERE registration_id IN ${regs}`)
@@ -44,6 +51,16 @@ try {
   await conn.query('DELETE FROM audit_logs')
   if (files.length) await conn.query('DELETE FROM files WHERE id IN (?)', [files.map((f) => f.id)])
   await conn.query("DELETE FROM users WHERE role = 'peserta'")
+  if (katalog) {
+    const mats = (await conn.query("SELECT f.id, f.stored_name FROM files f WHERE f.kind = 'material'"))[0]
+    for (const t of ['submissions', 'attendances', 'materials', 'assignments', 'class_sessions', 'batch_subjects', 'batches', 'subjects']) await conn.query(`DELETE FROM ${t}`)
+    await conn.query('DELETE FROM exam_tokens WHERE exam_id IN (SELECT id FROM exams WHERE program_id IS NOT NULL)')
+    await conn.query('DELETE FROM exams WHERE program_id IS NOT NULL')
+    await conn.query('DELETE FROM payment_plans WHERE program_id IS NOT NULL')
+    await conn.query('DELETE FROM fee_items WHERE program_id IS NOT NULL')
+    await conn.query('DELETE FROM programs')
+    if (mats.length) { await conn.query('DELETE FROM files WHERE id IN (?)', [mats.map((m) => m.id)]); files.push(...mats) }
+  }
   await conn.commit()
 
   // Berkas fisik dihapus setelah transaksi berhasil; kegagalan menghapus berkas tidak membatalkan reset.
@@ -61,4 +78,4 @@ try {
   await pool.end()
 }
 
-console.log('Selesai. Katalog, jadwal, staf, pengaturan, dan landing page tidak diubah.')
+console.log(katalog ? 'Selesai. Staf, pengaturan, bank soal, paket cicilan, dan landing page tidak diubah.' : 'Selesai. Katalog, jadwal, staf, pengaturan, dan landing page tidak diubah.')

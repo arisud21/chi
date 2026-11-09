@@ -11,7 +11,7 @@ const day = 86_400_000
 const at = (n) => new Date(Date.now() + n * day)
 const dateOnly = (n) => at(n).toISOString().slice(0, 10)
 
-const tables = ['batch_subjects', 'participant_profiles', 'submissions', 'assignments', 'attendances', 'grades', 'certificates', 'certificate_sequences', 'certificate_templates', 'payments', 'materials', 'class_sessions', 'subjects',
+const tables = ['registration_documents', 'exam_tokens', 'fee_items', 'exam_attempts', 'exams', 'questions', 'question_banks', 'notifications', 'installments', 'payment_plans', 'batch_subjects', 'participant_profiles', 'submissions', 'assignments', 'attendances', 'grades', 'certificates', 'certificate_sequences', 'certificate_templates', 'payments', 'materials', 'class_sessions', 'subjects',
   'registrations', 'batches', 'programs', 'email_tokens', 'email_queue', 'audit_logs', 'landing_revisions', 'settings', 'files', 'users']
 await q('SET FOREIGN_KEY_CHECKS = 0')
 for (const t of tables) await q(`TRUNCATE TABLE ${t}`)
@@ -84,7 +84,7 @@ const regs = [
 ]
 for (const [k, u, b, st, price, uc, code, inv, due, created] of regs) {
   R[k] = uid()
-  await q('INSERT INTO registrations (id, code, user_id, batch_id, status, price_snapshot, unique_code, invoice_no, due_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [R[k], code, U[u], B[b], st, price, uc, inv, at(due), at(created)])
+  await q('INSERT INTO registrations (id, code, user_id, program_id, batch_id, status, stage, price_snapshot, unique_code, invoice_no, due_at, created_at) VALUES (?,?,?,(SELECT program_id FROM batches WHERE id = ?),?,?,?,?,?,?,?,?)', [R[k], code, U[u], B[b], B[b], st, ['active', 'completed'].includes(st) ? 'aktif' : st === 'cancelled' || st === 'expired' ? 'data' : 'bayar_daftar', price, uc, inv, at(due), at(created)])
 }
 // Catatan: berkas bukti transfer demo tidak ada di disk (proof_file_id NULL); unggahan nyata lewat aplikasi.
 await q("INSERT INTO payments (id, registration_id, amount_due, amount_paid, payer_name, transfer_date, status, receipt_no, verified_by, created_at) VALUES (?,?,?,?,?,?,'verified',?,?,?)", [uid(), R.r1, 2500214, 2500214, 'Peserta Aktif', dateOnly(-44), 'KWT-202610-001', U.uang, at(-44)])
@@ -94,7 +94,8 @@ await q("INSERT INTO payments (id, registration_id, amount_due, amount_paid, pay
 await q('INSERT INTO grades (registration_id) VALUES (?), (?)', [R.r1, R.r5])
 await q("INSERT INTO payments (id, registration_id, amount_due, amount_paid, payer_name, transfer_date, status, receipt_no, verified_by, created_at) VALUES (?,?,?,?,?,?,'verified',?,?,?)", [uid(), R.r5, 2500331, 2500331, 'Peserta Belum Isi Data', dateOnly(-41), 'KWT-202610-005', U.uang, at(-41)])
 for (const [k, nik, tp, gender] of [['p1', '3277010101000001', 'Cimahi', 'L'], ['p3', '3277010101000003', 'Bandung', 'P']]) {
-  await q("INSERT INTO participant_profiles (user_id, nik, birth_place, birth_date, gender, address, rt, rw, district_id, district, city_id, city, province_id, province, postal_code, education, occupation, emergency_name, emergency_relation, emergency_phone, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [U[k], nik, tp, '2000-01-01', gender, 'Jl. Contoh No. 1', '01', '02', '3277010', 'Cimahi Selatan', '3277', 'Kota Cimahi', '32', 'Jawa Barat', '40511', 'SMA/SMK', 'Belum bekerja', 'Wali Contoh', 'Orang tua', '081200009999', new Date()])
+  await q("INSERT INTO participant_profiles (user_id, nik, birth_place, birth_date, gender, address, rt, rw, district_id, district, city_id, city, province_id, province, postal_code, education, occupation, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [U[k], nik, tp, '2000-01-01', gender, 'Jl. Contoh No. 1', '01', '02', '3277010', 'Cimahi Selatan', '3277', 'Kota Cimahi', '32', 'Jawa Barat', '40511', 'SMA/SMK', 'Belum bekerja', new Date()])
+  await q('UPDATE users SET nik = ?, birth_date = ? WHERE id = ?', [nik, '2000-01-01', U[k]])
 }
 await q("INSERT INTO grades (registration_id, theory, practical, attendance_pct, status) VALUES (?,88,92,96,'submitted')", [R.r4])
 
@@ -109,10 +110,25 @@ await q('INSERT INTO assignments (id, batch_id, title, description, due_at) VALU
 await q('INSERT INTO certificate_templates (id, version, config, is_active) VALUES (?,?,?,1)', [uid(), 1, JSON.stringify(DEFAULT_CONFIG)])
 
 const site = {
-  name: 'Cimahi Institute Hotel', bankName: 'Bank (isi di Pengaturan)', bankAccount: '0000000000', bankHolder: 'Cimahi Institute Hotel', payDueHours: 48,
-  phone: '(isi nomor telepon)', whatsapp: '6280000000000', address: 'Cimahi, Jawa Barat (isi alamat lengkap di Pengaturan)', hours: 'Senin sampai Jumat, 08.00 sampai 16.00',
+  name: 'Cimahi Institute Hotel', bankName: 'Bank BNI', bankAccount: '2040792254', bankHolder: 'Daya Juang Bersama Yayasan', payDueHours: 48,
+  regFee: 200000, minReenroll: 1000000, reenrollDue: dateOnly(30), refundCutoff: dateOnly(14), pelunasanDue: dateOnly(150),
+  lpkRegNo: '32.77.03.1004.35.2024', ketuaName: 'Dr. Gerinata Ginting, M.M.', batchLabel: 'Batch Ganjil TA. 2026/2027', email: 'infolpk.chi@gmail.com', website: 'cimahihotelinstitute.org', hotline: '08216733273',
+  phone: '0821 673 3273', whatsapp: '6280000000000', address: 'Jalan Pasantren KM.2, Cibabat, Cimahi Utara, Kota Cimahi 40513 Jawa Barat', hours: 'Senin sampai Jumat, 08.00 sampai 16.00',
   signerName: '(isi nama penanda tangan)', signerTitle: 'Kepala Akademik',
 }
+await q('INSERT INTO payment_plans (id, program_id, name, down_payment, installments) VALUES (?,NULL,?,?,?), (?,NULL,?,?,?), (?,NULL,?,?,?)',
+  [uid(), 'Lunas sekali bayar', 0, 1, uid(), 'Cicilan 3 kali (uang muka Rp1.000.000)', 1000000, 3, uid(), 'Cicilan 6 kali (uang muka Rp1.000.000)', 1000000, 6])
+const bankId = uid()
+await q('INSERT INTO question_banks (id, name) VALUES (?,?)', [bankId, 'Seleksi masuk (contoh)'])
+const sampleQs = [
+  ['Tamu datang ke meja resepsionis hotel. Apa yang dilakukan pertama kali?', ['Menyapa dan tersenyum', 'Menunggu tamu bicara', 'Melanjutkan pekerjaan', 'Meminta tamu antre'], 0],
+  ['Bagian hotel yang bertanggung jawab atas kebersihan kamar adalah...', ['Front office', 'Housekeeping', 'Food and beverage', 'Security'], 1],
+  ['Check-out adalah proses saat tamu...', ['Memesan kamar', 'Meninggalkan hotel dan menyelesaikan pembayaran', 'Mengganti kamar', 'Meminta makanan'], 1],
+  ['Kata sapaan yang sopan pada pagi hari adalah...', ['Selamat malam', 'Selamat siang', 'Selamat pagi', 'Selamat tidur'], 2],
+  ['Hasil dari 15 + 27 adalah...', ['42', '32', '43', '41'], 0],
+]
+for (const [body, opts, ci] of sampleQs) await q('INSERT INTO questions (id, bank_id, body, options, correct_idx) VALUES (?,?,?,?,?)', [uid(), bankId, body, JSON.stringify(opts), ci])
+await q('INSERT INTO exams (id, title, bank_id, program_id, open_at, close_at, duration_min, question_count) VALUES (?,?,?,NULL,?,?,?,?)', [uid(), 'Ujian tulis seleksi (contoh)', bankId, at(0), at(14), 30, 5])
 let n = 0
 const sec = (type, content) => ({ id: `sec-${++n}`, type, visible: true, content })
 const sections = [

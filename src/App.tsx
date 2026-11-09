@@ -4,8 +4,10 @@ import { ToastProvider } from './components/ui'
 import { useStore } from './lib/store'
 import { Belajar, SertifikatSaya } from './pages/peserta/Belajar'
 import { DataDiri } from './pages/peserta/DataDiri'
-import { Beranda, Katalog, Pendaftaran } from './pages/peserta/Peserta'
-import { ForgotPassword, Login, Register, ResetPassword, Verify, VerifyEmailPage } from './pages/public/Auth'
+import { Tahapan } from './pages/peserta/Tahapan'
+import { Notifikasi, UjianSaya } from './pages/peserta/Ujian'
+import { Biaya, UjianAdmin } from './pages/staff/Penerimaan'
+import { ForgotPassword, Login, Register, ResetPassword, Verify } from './pages/public/Auth'
 import { Landing, ProgramDetail, PublicLayout } from './pages/public/Public'
 import { LandingEditor } from './pages/staff/LandingEditor'
 import { Absensi } from './pages/staff/Absensi'
@@ -13,7 +15,8 @@ import { TemplateEditor } from './pages/staff/Akademik'
 import { Jadwal } from './pages/staff/Jadwal'
 import { MataPelajaran } from './pages/staff/MataPelajaran'
 import { Pertemuan } from './pages/staff/Pertemuan'
-import { PesertaList, Pendaftar } from './pages/staff/PesertaAdmin'
+import { EditDataPeserta, PesertaList, Pendaftar } from './pages/staff/PesertaAdmin'
+import { RincianBayar } from './pages/staff/Tagihan'
 import { Audit, Dashboard, EmailQueue, Nilai, Pembayaran, Pengaturan, Pengguna, ProgramAdmin, SertifikatAdmin } from './pages/staff/Staff'
 
 export default function App() {
@@ -31,12 +34,11 @@ export default function App() {
           <Route path="daftar" element={<Register />} />
           <Route path="lupa-password" element={<ForgotPassword />} />
           <Route path="atur-ulang" element={<ResetPassword />} />
-          <Route path="verifikasi-email" element={<VerifyEmailPage />} />
         </Route>
         <Route path="app" element={<RequireRole staff={false} />}>
-          <Route index element={<Beranda />} />
-          <Route path="katalog" element={<Katalog />} />
-          <Route path="pendaftaran" element={<Pendaftaran />} />
+          <Route index element={<Tahapan />} />
+          <Route path="ujian" element={<UjianSaya />} />
+          <Route path="notifikasi" element={<Notifikasi />} />
           <Route path="data-diri" element={<DataDiri />} />
           <Route path="belajar" element={<Belajar />} />
           <Route path="sertifikat" element={<SertifikatSaya />} />
@@ -45,9 +47,13 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="program" element={<ProgramAdmin />} />
           <Route path="pendaftar" element={<Pendaftar />} />
+          <Route path="pendaftar/:regId" element={<RincianBayar />} />
           <Route path="peserta" element={<PesertaList />} />
+          <Route path="peserta/:userId/data" element={<EditDataPeserta />} />
           <Route path="email" element={<EmailQueue />} />
           <Route path="pembayaran" element={<Pembayaran />} />
+          <Route path="biaya" element={<Biaya />} />
+          <Route path="ujian" element={<UjianAdmin />} />
           <Route path="absensi" element={<Absensi />} />
           <Route path="mapel" element={<MataPelajaran />} />
           <Route path="jadwal" element={<Jadwal />} />

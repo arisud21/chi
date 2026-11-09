@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { audit, cq, dt, fail, getSettings, mail, q, randomCode, tx, uid } from './lib.js'
 import { renderCertificatePdf } from './pdf.js'
+import { MIN_REENROLL_DEFAULT, REG_FEE_DEFAULT, admissionActions, allocatePayment, issueNip, notify, reenrollShortfall, remainingTotal, sweepAdmissions } from './admission.js'
 
 const ALL_STAFF = ['super_admin', 'admin_pendaftaran', 'admin_keuangan', 'akademik', 'instruktur']
 const CMS = ['super_admin', 'admin_pendaftaran']
@@ -9,6 +10,17 @@ void ALL_STAFF
 
 const num = (v, min = 0, max = Infinity) => { const n = Number(v); if (!Number.isFinite(n) || n < min || n > max) fail('Nilai angka tidak valid.'); return n }
 const str = (v, max = 255, req = true) => { const s = String(v ?? '').trim(); if (req && !s) fail('Ada isian wajib yang kosong.'); return s.slice(0, max) }
+/** Satu digit 1 sampai 9 (atau kosong). Dipakai untuk angkatan dan kode program di NIP. */
+const digit = (v, label) => { if (v === '' || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > 9) fail(`${label} harus angka 1 sampai 9.`); return n }
+/** Validasi satu mata pelajaran, dipakai simpan satu per satu dan impor massal. */
+const cleanSubject = (x) => {
+  if (!['teori', 'praktik', 'teori_praktik'].includes(x.kind)) fail('Jenis harus teori, praktik, atau teori dan praktik.')
+  const opt = (v, max, label) => { if (v === '' || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > max) fail(`${label} harus bilangan bulat 1 sampai ${max}.`); return n }
+  return {
+    name: str(x.name, 120), code: str(x.code, 12, false) || null, kind: x.kind, hours: num(x.hours, 1, 500),
+    hoursPerMeeting: opt(x.hoursPerMeeting, 24, 'Jam per pertemuan'), meetings: opt(x.meetings, 60, 'Jumlah pertemuan'), description: str(x.description, 255, false),
+  }
+}
 const okHref = (h) => !h || h.startsWith('/') || h.startsWith('#') || /^https:\/\//.test(h)
 
 async function seats(conn, batchId) {
@@ -19,37 +31,24 @@ const finalScore = (g, p) => Math.round(((g.theory * p.theory_weight + g.practic
 const recommend = (g, p) => finalScore(g, p) >= p.passing_score && Number(g.attendance_pct) >= p.min_attendance
 
 /** Kedaluwarsa otomatis (PAY-6). Dipanggil oleh job berkala dan saat state diminta. */
-export async function expireOverdue() {
-  return tx(async (c) => {
-    const due = await cq(c, "SELECT id, code FROM registrations WHERE status = 'pending_payment' AND due_at < ? FOR UPDATE", [dt()])
-    for (const r of due) {
-      await cq(c, "UPDATE registrations SET status = 'expired' WHERE id = ?", [r.id])
-      await audit(c, null, 'registrasi.kedaluwarsa', 'registrations', r.code)
-    }
-    return due.length
-  })
-}
+export const expireOverdue = sweepAdmissions
 
-/** Membuat registrasi + tagihan untuk satu peserta di dalam transaksi yang sudah berjalan. */
-export async function registerForBatch(c, user, batchId) {
-      const [b] = await cq(c, 'SELECT * FROM batches WHERE id = ? FOR UPDATE', [batchId]) // kunci baris angkatan: cegah oversell (REG-2)
-      if (!b) fail('Angkatan tidak ditemukan.')
-      if (b.status !== 'open') fail('Pendaftaran angkatan ini belum atau sudah tidak dibuka.')
-      const [p] = await cq(c, 'SELECT * FROM programs WHERE id = ?', [b.program_id])
-      const live = await cq(c, `SELECT r.batch_id, b.program_id FROM registrations r JOIN batches b ON b.id = r.batch_id WHERE r.user_id = ? AND r.status IN (${LIVE.map(() => '?').join(',')})`, [user.id, ...LIVE])
-      if (live.some((x) => x.batch_id === batchId)) fail('Anda sudah terdaftar di angkatan ini.')
-      if (live.some((x) => x.program_id === p.id)) fail('Anda masih punya pendaftaran aktif pada program yang sama.')
-      if ((await seats(c, batchId)) >= b.quota) fail('Kuota angkatan penuh.')
+/** Membuat registrasi + tagihan untuk satu peserta di dalam transaksi yang sudah berjalan. Angkatan ditetapkan admin kemudian. */
+export async function registerForProgram(c, user, programId) {
+      const [p] = await cq(c, 'SELECT * FROM programs WHERE id = ? AND is_active = 1 AND deleted_at IS NULL FOR UPDATE', [programId])
+      if (!p) fail('Jenis pelatihan tidak ditemukan atau tidak dibuka.')
+      const live = await cq(c, `SELECT id FROM registrations WHERE user_id = ? AND program_id = ? AND status IN (${LIVE.map(() => '?').join(',')})`, [user.id, p.id, ...LIVE])
+      if (live.length) fail('Anda masih punya pendaftaran aktif pada jenis pelatihan yang sama.')
       const settings = await getSettings(c)
       const ym = new Date().toISOString().slice(0, 7).replace('-', '')
       const [{ n }] = await cq(c, 'SELECT COUNT(*) n FROM registrations')
       const seq = String(Number(n) + 1).padStart(3, '0')
-      const due = new Date(Date.now() + (settings.payDueHours ?? 48) * 3_600_000)
+      const due = new Date(Date.now() + 366 * 86_400_000) // batas nyata ada di tiap tahap, bukan di registrasi
       const id = uid()
-      await cq(c, 'INSERT INTO registrations (id, code, user_id, batch_id, status, price_snapshot, unique_code, invoice_no, due_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        [id, `REG-${ym}-${seq}`, user.id, batchId, 'pending_payment', p.price, 100 + Math.floor(Math.random() * 900), `INV-${ym}-${seq}`, due])
-      await mail(c, user.email, `Tagihan ${p.title}`, `Halo ${user.name}, tagihan ${p.title} (${b.code}) sudah terbit. Buka portal peserta untuk detail pembayaran.`)
-      await audit(c, user.id, 'registrasi.buat', 'registrations', `${user.name} memilih ${b.code}`)
+      await cq(c, 'INSERT INTO registrations (id, code, user_id, program_id, batch_id, status, stage, price_snapshot, unique_code, invoice_no, due_at) VALUES (?,?,?,?,NULL,?,?,?,?,?,?)',
+        [id, `REG-${ym}-${seq}`, user.id, p.id, 'pending_payment', 'data', p.price, 0, `INV-${ym}-${seq}`, due])
+      await notify(c, user.id, `Registrasi ${p.title} berhasil`, `Halo ${user.name}, lengkapi data diri di aplikasi. Setelah itu Anda akan diminta membayar biaya pendaftaran ${'Rp' + Number(settings.regFee ?? REG_FEE_DEFAULT).toLocaleString('id-ID')}.`, '/app/data-diri')
+      await audit(c, user.id, 'registrasi.buat', 'registrations', `${user.name} memilih ${p.title}`)
 }
 
 /**
@@ -57,10 +56,29 @@ export async function registerForBatch(c, user, batchId) {
  * Kegagalan bisnis dilempar lewat fail() dan menjadi {ok:false,error}.
  */
 export const actions = {
+  ...admissionActions,
   /* ---------- registrasi dan pembayaran ---------- */
   createRegistration: {
     roles: ['peserta'],
-    fn: (ctx, batchId) => tx((c) => registerForBatch(c, ctx.user, batchId)),
+    fn: (ctx, programId) => tx((c) => registerForProgram(c, ctx.user, programId)),
+  },
+
+  assignBatch: {
+    roles: ['admin_pendaftaran', 'super_admin'],
+    fn: (ctx, regId, batchId) => tx(async (c) => {
+      const [r] = await cq(c, 'SELECT * FROM registrations WHERE id = ? FOR UPDATE', [regId])
+      if (!r) fail('Registrasi tidak ditemukan.')
+      if (!['pending_payment', 'waiting_verification', 'active'].includes(r.status)) fail('Angkatan hanya bisa ditetapkan untuk pendaftaran yang masih berjalan.')
+      const [b] = await cq(c, 'SELECT * FROM batches WHERE id = ? FOR UPDATE', [batchId])
+      if (!b) fail('Angkatan tidak ditemukan.')
+      if (b.program_id !== r.program_id) fail('Angkatan harus dari jenis pelatihan yang dipilih peserta.')
+      if (!['open', 'running'].includes(b.status)) fail('Angkatan ini sudah tidak menerima peserta.')
+      if (r.batch_id !== b.id && (await seats(c, b.id)) >= b.quota) fail('Kuota angkatan penuh.')
+      await cq(c, 'UPDATE registrations SET batch_id = ? WHERE id = ?', [b.id, r.id])
+      const [u] = await cq(c, 'SELECT email, name FROM users WHERE id = ?', [r.user_id])
+      await mail(c, u.email, 'Angkatan Anda ditetapkan', `Halo ${u.name}, Anda ditempatkan di angkatan ${b.code} (mulai ${b.start_date}). Cek jadwalnya di portal peserta.`)
+      await audit(c, ctx.user.id, 'registrasi.angkatan', 'registrations', `${r.code} -> ${b.code}`)
+    }),
   },
 
   cancelRegistration: {
@@ -82,32 +100,52 @@ export const actions = {
   },
 
   verifyPayment: {
-    roles: ['admin_keuangan', 'super_admin'],
+    roles: ['admin_keuangan', 'admin_pendaftaran', 'super_admin'],
     fn: (ctx, id) => tx(async (c) => {
       const [p] = await cq(c, "SELECT * FROM payments WHERE id = ? AND status = 'submitted' FOR UPDATE", [id])
       if (!p) fail('Pembayaran tidak dalam antrean.')
       const [r] = await cq(c, 'SELECT * FROM registrations WHERE id = ? FOR UPDATE', [p.registration_id])
-      const receipt = `KWT-${new Date().toISOString().slice(0, 7).replace('-', '')}-${r.code.slice(-3)}`
+      const receipt = `KWT-${new Date().toISOString().slice(0, 7).replace('-', '')}-${r.code.slice(-3)}-${p.id.slice(0, 4).toUpperCase()}`
       await cq(c, "UPDATE payments SET status = 'verified', verified_by = ?, receipt_no = ? WHERE id = ?", [ctx.user.id, receipt, id])
-      await cq(c, "UPDATE registrations SET status = 'active' WHERE id = ?", [r.id])
-      await cq(c, 'INSERT IGNORE INTO grades (registration_id) VALUES (?)', [r.id])
-      const [u] = await cq(c, 'SELECT email, name FROM users WHERE id = ?', [r.user_id])
-      await mail(c, u.email, `Kwitansi ${receipt}`, `Pembayaran ${r.invoice_no} sebesar Rp${Number(p.amount_paid).toLocaleString('id-ID')} telah diverifikasi. Pendaftaran Anda aktif. Sebelum kelas dimulai, lengkapi data diri di portal peserta (menu Data diri).`)
-      await audit(c, ctx.user.id, 'pembayaran.setujui', 'payments', `${r.invoice_no} Rp${p.amount_paid}`)
+      const paid = 'Rp' + Number(p.amount_paid).toLocaleString('id-ID')
+      if (p.kind === 'pendaftaran') {
+        await cq(c, "UPDATE registrations SET stage = 'ujian' WHERE id = ? AND stage = 'bayar_daftar'", [r.id])
+        await notify(c, r.user_id, 'Pembayaran pendaftaran dikonfirmasi', `Kwitansi ${receipt}, ${paid}. Ujian tulis kini terbuka. Buka menu Ujian dan masukkan token dari admin saat jadwal ujian tiba.`, '/app/ujian')
+      } else {
+        // Pembayaran lebih memotong termin berikutnya. Pembayaran kurang tetap disimpan, peserta diminta segera melunasi.
+        const { leftover } = await allocatePayment(c, p)
+        const rest = await remainingTotal(c, r.id)
+        const rpx = (n) => 'Rp' + Number(n).toLocaleString('id-ID')
+        const over = Number(p.amount_paid) > Number(p.amount_due) ? ` Kelebihan pembayaran otomatis memotong cicilan berikutnya.` : ''
+        const leftNote = leftover > 0 ? ` Kelebihan ${rpx(leftover)} melebihi seluruh tagihan dan dicatat untuk dikembalikan.` : ''
+        const sisa = rest > 0 ? ` Sisa tagihan ${rpx(rest)}.` : ' Seluruh tagihan lunas.'
+        const s = await getSettings(c)
+        const short = await reenrollShortfall(c, r.id, s)
+        const shortNote = short > 0 ? ` Pembayaran registrasi ulang kurang ${rpx(short)} dari minimal ${rpx(s.minReenroll ?? MIN_REENROLL_DEFAULT)}. Segera lunasi kekurangan ini.` : ''
+        if (p.kind === 'registrasi_ulang') {
+          await cq(c, "UPDATE registrations SET stage = 'aktif', status = 'active' WHERE id = ?", [r.id])
+          await cq(c, 'INSERT IGNORE INTO grades (registration_id) VALUES (?)', [r.id])
+          const nip = await issueNip(c, r)
+          const nipNote = nip ? ` NIP Anda: ${nip}.` : ' NIP akan diterbitkan admin.'
+          await notify(c, r.user_id, short > 0 ? 'Registrasi ulang diterima, pembayaran kurang' : 'Registrasi ulang dikonfirmasi', `Kwitansi ${receipt}, ${paid}. Anda resmi menjadi peserta didik.${nipNote}${shortNote}${over}${leftNote}${sisa}`, '/app')
+        } else {
+          await notify(c, r.user_id, short > 0 ? 'Cicilan diterima, registrasi ulang masih kurang' : 'Cicilan dikonfirmasi', `Kwitansi ${receipt}, ${paid}.${shortNote}${over}${leftNote}${sisa}`, '/app')
+        }
+      }
+      await audit(c, ctx.user.id, 'pembayaran.setujui', 'payments', `${r.invoice_no} ${p.kind} Rp${p.amount_paid}`)
     }),
   },
 
   rejectPayment: {
-    roles: ['admin_keuangan', 'super_admin'],
+    roles: ['admin_keuangan', 'admin_pendaftaran', 'super_admin'],
     fn: (ctx, id, reason) => tx(async (c) => {
       const why = str(reason, 200)
       const [p] = await cq(c, "SELECT * FROM payments WHERE id = ? AND status = 'submitted' FOR UPDATE", [id])
       if (!p) fail('Pembayaran tidak dalam antrean.')
       const [r] = await cq(c, 'SELECT * FROM registrations WHERE id = ? FOR UPDATE', [p.registration_id])
       await cq(c, "UPDATE payments SET status = 'rejected', reject_reason = ?, verified_by = ? WHERE id = ?", [why, ctx.user.id, id])
-      await cq(c, "UPDATE registrations SET status = 'pending_payment' WHERE id = ?", [r.id])
-      const [u] = await cq(c, 'SELECT email FROM users WHERE id = ?', [r.user_id])
-      await mail(c, u.email, 'Pembayaran ditolak: unggah ulang bukti', `Alasan: ${why}`)
+      if (p.installment_id) await cq(c, "UPDATE installments SET status = IF(paid_amount >= amount, 'paid', IF(paid_amount > 0, 'partial', 'unpaid')) WHERE id = ?", [p.installment_id])
+      await notify(c, r.user_id, 'Pembayaran ditolak: unggah ulang bukti', `Alasan: ${why}`, '/app')
       await audit(c, ctx.user.id, 'pembayaran.tolak', 'payments', `${r.invoice_no}: ${why}`)
     }),
   },
@@ -120,10 +158,14 @@ export const actions = {
       const slug = str(p.slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), 160)
       const r = p.rules ?? {}
       const vals = [slug, title, str(p.category, 80), str(p.shortDesc, 255, false), str(p.description, 5000, false), num(p.durationHours, 1), num(p.price, 0), p.active ? 1 : 0,
-        num(r.theoryWeight, 0, 100), num(r.practicalWeight, 0, 100), num(r.passingScore, 0, 100), num(r.minAttendance, 0, 100)]
+        num(r.theoryWeight, 0, 100), num(r.practicalWeight, 0, 100), num(r.passingScore, 0, 100), num(r.minAttendance, 0, 100), digit(p.nipCode, 'Kode NIP program')]
+      if (vals[vals.length - 1] != null) {
+        const [dup] = await cq(c, 'SELECT title FROM programs WHERE nip_code = ? AND id <> ? AND deleted_at IS NULL', [vals[vals.length - 1], p.id])
+        if (dup) fail(`Kode NIP ${vals[vals.length - 1]} sudah dipakai program ${dup.title}.`)
+      }
       const [ex] = await cq(c, 'SELECT id FROM programs WHERE id = ?', [p.id])
-      if (ex) await cq(c, 'UPDATE programs SET slug=?, title=?, category=?, short_desc=?, description=?, duration_hours=?, price=?, is_active=?, theory_weight=?, practical_weight=?, passing_score=?, min_attendance=? WHERE id = ?', [...vals, p.id])
-      else await cq(c, 'INSERT INTO programs (slug, title, category, short_desc, description, duration_hours, price, is_active, theory_weight, practical_weight, passing_score, min_attendance, id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [...vals, p.id || uid()])
+      if (ex) await cq(c, 'UPDATE programs SET slug=?, title=?, category=?, short_desc=?, description=?, duration_hours=?, price=?, is_active=?, theory_weight=?, practical_weight=?, passing_score=?, min_attendance=?, nip_code=? WHERE id = ?', [...vals, p.id])
+      else await cq(c, 'INSERT INTO programs (slug, title, category, short_desc, description, duration_hours, price, is_active, theory_weight, practical_weight, passing_score, min_attendance, nip_code, id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [...vals, p.id || uid()])
       await audit(c, ctx.user.id, ex ? 'program.ubah' : 'program.buat', 'programs', title)
     }),
   },
@@ -179,10 +221,10 @@ export const actions = {
       if (!b.startDate || !b.endDate || b.endDate < b.startDate) fail('Tanggal selesai sebelum tanggal mulai.')
       if (!['draft', 'open', 'running', 'finished', 'cancelled'].includes(b.status)) fail('Status tidak valid.')
       // Instruktur, lokasi, dan jadwal diatur Akademik lewat saveBatchSchedule.
-      const vals = [b.programId, str(b.code, 40), b.startDate, b.endDate, num(b.quota, 1), b.status]
+      const vals = [b.programId, str(b.code, 40), b.startDate, b.endDate, num(b.quota, 1), b.status, digit(b.angkatan, 'Angkatan')]
       const [ex] = await cq(c, 'SELECT id FROM batches WHERE id = ?', [b.id])
-      if (ex) await cq(c, 'UPDATE batches SET program_id=?, code=?, start_date=?, end_date=?, quota=?, status=? WHERE id = ?', [...vals, b.id])
-      else await cq(c, 'INSERT INTO batches (program_id, code, start_date, end_date, quota, status, id) VALUES (?,?,?,?,?,?,?)', [...vals, b.id || uid()])
+      if (ex) await cq(c, 'UPDATE batches SET program_id=?, code=?, start_date=?, end_date=?, quota=?, status=?, angkatan=? WHERE id = ?', [...vals, b.id])
+      else await cq(c, 'INSERT INTO batches (program_id, code, start_date, end_date, quota, status, angkatan, id) VALUES (?,?,?,?,?,?,?,?)', [...vals, b.id || uid()])
       await audit(c, ctx.user.id, ex ? 'batch.ubah' : 'batch.buat', 'batches', b.code)
     }),
   },
@@ -193,18 +235,44 @@ export const actions = {
   saveSubject: {
     roles: ['akademik', 'super_admin'],
     fn: (ctx, x) => tx(async (c) => {
-      const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [x.programId])
-      if (!p) fail('Pilih pelatihan.')
-      if (!['teori', 'praktik'].includes(x.kind)) fail('Jenis harus teori atau praktik.')
-      const name = str(x.name, 120)
+      const pid = x.programId || null // kosong = kelas gabungan, berlaku untuk semua pelatihan
+      if (pid) { const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [pid]); if (!p) fail('Pilih pelatihan.') }
+      const v = cleanSubject(x)
       const [ex] = x.id ? await cq(c, 'SELECT * FROM subjects WHERE id = ? FOR UPDATE', [x.id]) : []
-      if (ex && ex.program_id !== x.programId) fail('Mata pelajaran tidak bisa dipindah ke pelatihan lain.')
-      const [dup] = await cq(c, 'SELECT id FROM subjects WHERE program_id = ? AND name = ? AND id <> ?', [x.programId, name, x.id ?? ''])
-      if (dup) fail('Mata pelajaran dengan nama itu sudah ada di pelatihan ini.')
-      const vals = [x.programId, name, x.kind, num(x.hours, 1, 500), str(x.description, 255, false), x.active === false ? 0 : 1]
-      if (ex) await cq(c, 'UPDATE subjects SET program_id=?, name=?, kind=?, hours=?, description=?, is_active=? WHERE id = ?', [...vals, x.id])
-      else await cq(c, 'INSERT INTO subjects (program_id, name, kind, hours, description, is_active, id) VALUES (?,?,?,?,?,?,?)', [...vals, x.id || uid()])
-      await audit(c, ctx.user.id, ex ? 'mapel.ubah' : 'mapel.tambah', 'subjects', name)
+      if (ex && (ex.program_id ?? null) !== pid) fail('Mata pelajaran tidak bisa dipindah ke pelatihan lain.')
+      const [dup] = await cq(c, `SELECT id FROM subjects WHERE ${pid ? 'program_id = ?' : 'program_id IS NULL'} AND LOWER(name) = LOWER(?) AND id <> ?`, [...(pid ? [pid] : []), v.name, x.id ?? ''])
+      if (dup) fail(pid ? 'Mata pelajaran dengan nama itu sudah ada di pelatihan ini.' : 'Kelas gabungan dengan nama itu sudah ada.')
+      const vals = [pid, v.code, v.name, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description, x.active === false ? 0 : 1]
+      if (ex) await cq(c, 'UPDATE subjects SET program_id=?, code=?, name=?, kind=?, hours=?, hours_per_meeting=?, meetings=?, description=?, is_active=? WHERE id = ?', [...vals, x.id])
+      else await cq(c, 'INSERT INTO subjects (program_id, code, name, kind, hours, hours_per_meeting, meetings, description, is_active, id) VALUES (?,?,?,?,?,?,?,?,?,?)', [...vals, x.id || uid()])
+      await audit(c, ctx.user.id, ex ? 'mapel.ubah' : 'mapel.tambah', 'subjects', v.name)
+    }),
+  },
+  /** Impor banyak mata pelajaran dari spreadsheet. Nama yang sama di program yang sama diperbarui bila diminta, selain itu dilewati. */
+  importSubjects: {
+    roles: ['akademik', 'super_admin'],
+    fn: (ctx, items, updateExisting) => tx(async (c) => {
+      if (!Array.isArray(items) || !items.length) fail('Tidak ada mata pelajaran untuk diimpor.')
+      if (items.length > 300) fail('Maksimal 300 mata pelajaran sekali impor.')
+      const out = { added: 0, updated: 0, skipped: 0 }
+      const progs = new Map()
+      for (const x of items) {
+        const pid = x.shared ? null : String(x.programId ?? '')
+        if (pid && !progs.has(pid)) progs.set(pid, (await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [pid]))[0] ?? null)
+        if (pid && !progs.get(pid)) fail('Ada bagian yang belum dipetakan ke pelatihan yang valid.')
+        const v = cleanSubject(x)
+        const [ex] = await cq(c, `SELECT id FROM subjects WHERE ${pid ? 'program_id = ?' : 'program_id IS NULL'} AND LOWER(name) = LOWER(?) FOR UPDATE`, [...(pid ? [pid] : []), v.name])
+        if (ex) {
+          if (!updateExisting) { out.skipped++; continue }
+          await cq(c, 'UPDATE subjects SET code=?, kind=?, hours=?, hours_per_meeting=?, meetings=?, description=? WHERE id = ?', [v.code, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description, ex.id])
+          out.updated++
+        } else {
+          await cq(c, 'INSERT INTO subjects (id, program_id, code, name, kind, hours, hours_per_meeting, meetings, description) VALUES (?,?,?,?,?,?,?,?,?)', [uid(), pid, v.code, v.name, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description])
+          out.added++
+        }
+      }
+      await audit(c, ctx.user.id, 'mapel.impor', 'subjects', `${out.added} baru, ${out.updated} diperbarui, ${out.skipped} dilewati`)
+      return out
     }),
   },
   deleteSubject: {
@@ -241,7 +309,7 @@ export const actions = {
         const n = num(x.sessions, 1, 50)
         if (seen.has(x.subjectId)) fail('Mata pelajaran terpilih dua kali.')
         seen.add(x.subjectId)
-        const [sj] = await cq(c, 'SELECT id FROM subjects WHERE id = ? AND program_id = ? AND is_active = 1', [x.subjectId, bt.program_id])
+        const [sj] = await cq(c, 'SELECT id FROM subjects WHERE id = ? AND (program_id = ? OR program_id IS NULL) AND is_active = 1', [x.subjectId, bt.program_id])
         if (!sj) fail('Mata pelajaran tidak valid untuk pelatihan angkatan ini.')
         total += n
       }
@@ -392,7 +460,7 @@ export const actions = {
     fn: (ctx, regId, passed, overrideReason) => tx(async (c) => {
       const [g] = await cq(c, "SELECT * FROM grades WHERE registration_id = ? AND status = 'submitted' FOR UPDATE", [regId])
       if (!g) fail('Nilai belum dikirim instruktur.')
-      const [r] = await cq(c, 'SELECT r.*, b.program_id FROM registrations r JOIN batches b ON b.id = r.batch_id WHERE r.id = ? FOR UPDATE', [regId])
+      const [r] = await cq(c, 'SELECT * FROM registrations WHERE id = ? FOR UPDATE', [regId])
       const [p] = await cq(c, 'SELECT * FROM programs WHERE id = ?', [r.program_id])
       const rec = recommend(g, p)
       if (rec !== !!passed && !String(overrideReason ?? '').trim()) fail('Menimpa rekomendasi sistem wajib disertai alasan.')
@@ -418,8 +486,8 @@ export const actions = {
         const [tpl] = await cq(c, 'SELECT id FROM certificate_templates WHERE is_active = 1 LIMIT 1')
         const id = uid()
         await cq(c, 'INSERT INTO certificates (id, registration_id, template_id, number, verification_code) VALUES (?,?,?,?,?)', [id, regId, tpl?.id ?? null, `CERT/CIH/${year}/${String(n).padStart(4, '0')}`, randomCode(10)])
-        const [u] = await cq(c, 'SELECT u.email, u.name, u.email_verified_at FROM users u JOIN registrations r ON r.user_id = u.id WHERE r.id = ?', [regId])
-        if (u.email_verified_at) await mail(c, u.email, 'Sertifikat dan transkrip Anda', 'Sertifikat dan transkrip dapat diunduh dari portal peserta.')
+        const [u] = await cq(c, 'SELECT u.email, u.name FROM users u JOIN registrations r ON r.user_id = u.id WHERE r.id = ?', [regId])
+        await mail(c, u.email, 'Sertifikat dan transkrip Anda', 'Sertifikat dan transkrip dapat diunduh dari portal peserta.')
         await audit(c, ctx.user.id, 'sertifikat.terbit', 'certificates', `${regId}`)
         return id
       })
@@ -497,7 +565,8 @@ export const actions = {
         payDueHours: num(s.payDueHours, 1, 720), phone: str(s.phone, 40, false), whatsapp: str(s.whatsapp, 20, false), address: str(s.address, 255, false),
         hours: str(s.hours, 120, false), signerName: str(s.signerName, 80, false), signerTitle: str(s.signerTitle, 80, false),
       }
-      await cq(c, "INSERT INTO settings (k, v) VALUES ('site', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)", [JSON.stringify(clean)])
+      const cur = await getSettings(c) // pertahankan kunci penerimaan dan biaya yang diatur di menu lain
+      await cq(c, "INSERT INTO settings (k, v) VALUES ('site', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)", [JSON.stringify({ ...cur, ...clean })])
       await audit(c, ctx.user.id, 'pengaturan.ubah', 'settings', clean.name)
     }),
   },
@@ -523,8 +592,8 @@ export const actions = {
     roles: ['admin_pendaftaran', 'super_admin', 'instruktur'],
     fn: (ctx, scope, scopeId, subject, body) => tx(async (c) => {
       let rows
-      if (scope === 'all') rows = await cq(c, "SELECT DISTINCT u.email FROM users u JOIN registrations r ON r.user_id = u.id WHERE r.status IN ('active','pending_payment','waiting_verification') AND u.email_verified_at IS NOT NULL")
-      else if (scope === 'program') rows = await cq(c, "SELECT DISTINCT u.email FROM users u JOIN registrations r ON r.user_id = u.id JOIN batches b ON b.id = r.batch_id WHERE b.program_id = ? AND r.status IN ('active','pending_payment','waiting_verification')", [scopeId])
+      if (scope === 'all') rows = await cq(c, "SELECT DISTINCT u.email FROM users u JOIN registrations r ON r.user_id = u.id WHERE r.status IN ('active','pending_payment','waiting_verification')")
+      else if (scope === 'program') rows = await cq(c, "SELECT DISTINCT u.email FROM users u JOIN registrations r ON r.user_id = u.id WHERE r.program_id = ? AND r.status IN ('active','pending_payment','waiting_verification')", [scopeId])
       else if (scope === 'batch') { await assertOwnBatch(c, ctx.user, scopeId); rows = await cq(c, "SELECT DISTINCT u.email FROM users u JOIN registrations r ON r.user_id = u.id WHERE r.batch_id = ? AND r.status IN ('active','pending_payment','waiting_verification')", [scopeId]) }
       else fail('Segmen tidak dikenal.')
       if (ctx.user.role === 'instruktur' && scope !== 'batch') fail('Instruktur hanya dapat mengumumkan ke angkatannya.', 403)
@@ -533,13 +602,6 @@ export const actions = {
       await audit(c, ctx.user.id, 'pengumuman.kirim', 'email_queue', `${scope}: ${rows.length} penerima`)
       return rows.length
     }),
-  },
-  verifyEmailDev: {
-    roles: ['peserta'],
-    fn: async (ctx) => {
-      if (process.env.NODE_ENV === 'production') fail('Tidak tersedia.', 403)
-      await q('UPDATE users SET email_verified_at = ? WHERE id = ?', [dt(), ctx.user.id])
-    },
   },
 }
 

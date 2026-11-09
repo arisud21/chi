@@ -1,12 +1,12 @@
 import {
-  IconAward, IconBook2, IconCertificate, IconChecklist, IconCreditCard, IconFileInvoice, IconHistory, IconHome,
+  IconAward, IconBell, IconBook2, IconCoin, IconPencilCheck, IconCertificate, IconChecklist, IconCreditCard, IconHistory, IconHome,
   IconCalendarEvent, IconFiles, IconIdBadge2, IconLayoutDashboard, IconLogout, IconMail, IconMenu2, IconPalette, IconSchool, IconSettings, IconUsers, IconWorld, IconX, IconListDetails,
 } from '@tabler/icons-react'
 import { useState, type ComponentType } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { changePassword, logout, useStore } from '../lib/store'
 import { ROLE_LABEL, type Role } from '../lib/types'
-import { Field, Logo, Modal, useAct } from './ui'
+import { Field, Logo, Modal, PasswordInput, useAct } from './ui'
 
 interface NavItem { to: string; label: string; icon: ComponentType<{ size?: number }>; roles: Role[]; end?: boolean }
 interface NavGroup { title: string; items: NavItem[] }
@@ -19,12 +19,14 @@ const STAFF_NAV: NavGroup[] = [
   ] },
   { title: 'Pendaftaran', items: [
     { to: '/admin/program', label: 'Program dan angkatan', icon: IconBook2, roles: ['super_admin', 'admin_pendaftaran'] },
+    { to: '/admin/ujian', label: 'Ujian tulis', icon: IconPencilCheck, roles: ['super_admin', 'admin_pendaftaran', 'akademik'] },
     { to: '/admin/pendaftar', label: 'Pendaftar', icon: IconListDetails, roles: ['super_admin', 'admin_pendaftaran', 'admin_keuangan'] },
     { to: '/admin/peserta', label: 'Peserta', icon: IconUsers, roles: ['super_admin', 'admin_pendaftaran', 'akademik'] },
     { to: '/admin/email', label: 'Pengumuman dan email', icon: IconMail, roles: ['super_admin', 'admin_pendaftaran', 'instruktur'] },
   ] },
   { title: 'Keuangan', items: [
-    { to: '/admin/pembayaran', label: 'Verifikasi pembayaran', icon: IconCreditCard, roles: ['super_admin', 'admin_keuangan'] },
+    { to: '/admin/pembayaran', label: 'Verifikasi pembayaran', icon: IconCreditCard, roles: ['super_admin', 'admin_keuangan', 'admin_pendaftaran'] },
+    { to: '/admin/biaya', label: 'Biaya dan cicilan', icon: IconCoin, roles: ['super_admin', 'admin_keuangan'] },
   ] },
   { title: 'Akademik', items: [
     { to: '/admin/mapel', label: 'Bank mata pelajaran', icon: IconBook2, roles: ['super_admin', 'akademik'] },
@@ -47,12 +49,12 @@ const STAFF_NAV: NavGroup[] = [
 
 const PESERTA_NAV: NavGroup[] = [
   { title: 'Menu', items: [
-    { to: '/app', label: 'Beranda', icon: IconHome, roles: ['peserta'], end: true },
-    { to: '/app/katalog', label: 'Katalog program', icon: IconBook2, roles: ['peserta'] },
-    { to: '/app/pendaftaran', label: 'Pendaftaran saya', icon: IconFileInvoice, roles: ['peserta'] },
+    { to: '/app', label: 'Tahapan', icon: IconHome, roles: ['peserta'], end: true },
+    { to: '/app/ujian', label: 'Ujian tulis', icon: IconPencilCheck, roles: ['peserta'] },
     { to: '/app/data-diri', label: 'Data diri', icon: IconIdBadge2, roles: ['peserta'] },
     { to: '/app/belajar', label: 'Ruang belajar', icon: IconSchool, roles: ['peserta'] },
     { to: '/app/sertifikat', label: 'Sertifikat', icon: IconAward, roles: ['peserta'] },
+    { to: '/app/notifikasi', label: 'Notifikasi', icon: IconBell, roles: ['peserta'] },
   ] },
 ]
 
@@ -74,8 +76,8 @@ function ForceChange() {
     <Modal open title="Ganti password sekarang" onClose={() => {}}>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(changePassword(o, n), 'Password diganti.') }}>
         <p className="text-sm text-muted">Akun Anda memakai password sementara. Ganti dulu sebelum melanjutkan.</p>
-        <Field label="Password sementara"><input className="input" type="password" required value={o} onChange={(e) => setO(e.target.value)} autoComplete="current-password" /></Field>
-        <Field label="Password baru" hint="Minimal 8 karakter."><input className="input" type="password" required minLength={8} value={n} onChange={(e) => setN(e.target.value)} autoComplete="new-password" /></Field>
+        <Field label="Password sementara"><PasswordInput required value={o} onChange={(e) => setO(e.target.value)} autoComplete="current-password" /></Field>
+        <Field label="Password baru" hint="Minimal 8 karakter."><PasswordInput required minLength={8} value={n} onChange={(e) => setN(e.target.value)} autoComplete="new-password" /></Field>
         <button className="btn-primary w-full">Simpan</button>
       </form>
     </Modal>
@@ -86,8 +88,11 @@ function Shell({ staff }: { staff: boolean }) {
   const user = useStore((s) => s.users.find((u) => u.id === s.sessionUserId))!
   const [open, setOpen] = useState(false)
   const nav = useNavigate()
+  const unread = useStore((s) => s.notifications.filter((n) => !n.read).length)
+  const registeredAgain = useStore((s) => s.registrations.some((r) => r.stage === 'aktif'))
   const groups = (staff ? STAFF_NAV : PESERTA_NAV)
-    .map((g) => ({ ...g, items: g.items.filter((i) => i.roles.includes(user.role)) }))
+    // Setelah registrasi ulang, menu Ujian tulis tidak diperlukan lagi.
+    .map((g) => ({ ...g, items: g.items.filter((i) => i.roles.includes(user.role) && !(!staff && registeredAgain && i.to === '/app/ujian')).map((i) => (!staff && registeredAgain && i.to === '/app' ? { ...i, label: 'Beranda' } : i)) }))
     .filter((g) => g.items.length)
 
   const loc = useLocation()
@@ -112,6 +117,7 @@ function Shell({ staff }: { staff: boolean }) {
                 className={({ isActive }) => `group relative mb-0.5 flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors duration-200 ${isActive ? 'bg-brand-600 text-white shadow-sm' : 'text-ink hover:bg-brand-50'}`}
               >
                 <i.icon size={19} />{i.label}
+                {i.to === '/app/notifikasi' && unread > 0 && <span className="ml-auto grid min-w-5 place-items-center rounded-full bg-brand-100 px-1.5 text-xs font-bold text-brand-700" aria-label={`${unread} belum dibaca`}>{unread}</span>}
               </NavLink>
             ))}
           </div>
@@ -140,6 +146,7 @@ function Shell({ staff }: { staff: boolean }) {
           <button className="btn-ghost !px-2.5 lg:hidden" onClick={() => setOpen(true)} aria-label="Buka menu"><IconMenu2 size={20} /></button>
           <div className="hidden text-sm text-muted lg:block">{staff ? 'Panel pengelola' : 'Portal peserta'}</div>
           <div className="flex items-center gap-3">
+            {!staff && <Link to="/app/notifikasi" className="btn-ghost relative !px-2.5" aria-label={unread ? `Notifikasi, ${unread} belum dibaca` : 'Notifikasi'}><IconBell size={20} />{unread > 0 && <span className="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-brand-600 px-1 text-xs font-bold text-white">{unread}</span>}</Link>}
             <div className="text-right leading-tight">
               <p className="text-sm font-semibold">{user.name}</p>
               <p className="text-xs text-muted">{ROLE_LABEL[user.role]}</p>

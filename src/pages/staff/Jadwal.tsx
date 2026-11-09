@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Badge, Empty, Field, Modal, PageHeader, dateID, useAct } from '../../components/ui'
 import { saveBatchSchedule, useStore } from '../../lib/store'
 import type { Batch } from '../../lib/types'
+import { SUBJECT_KIND } from './ImporMapel'
 
 const DAYS = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min']
 
@@ -24,7 +25,7 @@ export function Jadwal() {
   const [programId, setProgramId] = useState(programs[0]?.id ?? '')
   const [f, setF] = useState<Form | null>(null)
   const instructors = s.users.filter((u) => u.role === 'instruktur' && u.active)
-  const bank = s.subjects.filter((x) => x.programId === programId && x.active).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+  const bank = s.subjects.filter((x) => (x.programId === programId || x.programId === '') && x.active).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
   const batches = s.batches.filter((b) => b.programId === programId && b.status !== 'cancelled' && b.status !== 'finished')
 
   const edit = (b: Batch) => setF({
@@ -108,8 +109,8 @@ export function Jadwal() {
                 const on = f.picks[x.id] !== undefined
                 return (
                   <li key={x.id} className={`flex items-center gap-3 rounded-lg border p-3 transition ${on ? 'border-brand-200 bg-brand-50' : 'border-line bg-white'}`}>
-                    <input id={`sj-${x.id}`} type="checkbox" className="size-5 shrink-0 accent-brand-600" checked={on} onChange={(e) => { const picks = { ...f.picks }; if (e.target.checked) picks[x.id] = Math.max(1, Math.ceil(x.hours / 4)); else delete picks[x.id]; setF({ ...f, picks }) }} />
-                    <label htmlFor={`sj-${x.id}`} className="min-w-0 flex-1 cursor-pointer text-sm"><span className="font-semibold">{x.name}</span><span className="block text-xs text-muted capitalize">{x.kind} · {x.hours} jam</span></label>
+                    <input id={`sj-${x.id}`} type="checkbox" className="size-5 shrink-0 accent-brand-600" checked={on} onChange={(e) => { const picks = { ...f.picks }; if (e.target.checked) picks[x.id] = x.meetings ?? Math.max(1, Math.ceil(x.hours / 4)); else delete picks[x.id]; setF({ ...f, picks }) }} />
+                    <label htmlFor={`sj-${x.id}`} className="min-w-0 flex-1 cursor-pointer text-sm"><span className="font-semibold">{x.name}</span><span className="block text-xs text-muted">{x.programId === '' ? 'Gabungan · ' : ''}{x.code ? `${x.code} · ` : ''}{SUBJECT_KIND[x.kind]} · {x.hours} jam{x.hoursPerMeeting && x.meetings ? ` (${x.hoursPerMeeting} jam x ${x.meetings})` : ''}</span></label>
                     {on && <label className="flex items-center gap-2 text-xs text-muted">Pertemuan<input aria-label={`Jumlah pertemuan ${x.name}`} className="input !min-h-10 !w-16 !px-2" type="number" min={1} max={50} value={f.picks[x.id]} onChange={(e) => setF({ ...f, picks: { ...f.picks, [x.id]: Math.max(1, Math.min(50, +e.target.value || 1)) } })} /></label>}
                   </li>
                 )

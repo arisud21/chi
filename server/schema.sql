@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS users (
   name VARCHAR(120) NOT NULL,
   email VARCHAR(160) NOT NULL UNIQUE,
   phone VARCHAR(30) NOT NULL DEFAULT '',
+  nik CHAR(16) NULL UNIQUE,
+  birth_date DATE NULL,
   password_hash VARCHAR(100) NOT NULL,
   role ENUM('super_admin','admin_pendaftaran','admin_keuangan','akademik','instruktur','peserta') NOT NULL,
   email_verified_at DATETIME NULL,
@@ -38,7 +40,8 @@ CREATE TABLE IF NOT EXISTS programs (
   theory_weight INT NOT NULL DEFAULT 30,
   practical_weight INT NOT NULL DEFAULT 70,
   passing_score INT NOT NULL DEFAULT 70,
-  min_attendance INT NOT NULL DEFAULT 80
+  min_attendance INT NOT NULL DEFAULT 80,
+  nip_code TINYINT NULL -- digit program di NIP, misalnya 1 untuk FB dan 2 untuk RD
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS batches (
@@ -55,6 +58,7 @@ CREATE TABLE IF NOT EXISTS batches (
   start_time TIME NULL,
   end_time TIME NULL,
   planned_sessions INT NOT NULL DEFAULT 0,
+  angkatan TINYINT NULL, -- angkatan ke-berapa (1 sampai 9), dipakai di NIP
   FOREIGN KEY (program_id) REFERENCES programs(id),
   FOREIGN KEY (instructor_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -63,16 +67,24 @@ CREATE TABLE IF NOT EXISTS registrations (
   id CHAR(36) PRIMARY KEY,
   code VARCHAR(30) NOT NULL UNIQUE,
   user_id CHAR(36) NOT NULL,
-  batch_id CHAR(36) NOT NULL,
+  program_id CHAR(36) NOT NULL,
+  batch_id CHAR(36) NULL, -- diisi admin saat peserta dinyatakan lulus
   status ENUM('pending_payment','waiting_verification','active','completed','cancelled','expired') NOT NULL DEFAULT 'pending_payment',
+  -- tahapan penerimaan: data diri, bayar pendaftaran, ujian tulis, menunggu hasil, registrasi ulang, aktif belajar
+  stage ENUM('data','bayar_daftar','ujian','menunggu_hasil','registrasi_ulang','aktif','tidak_lulus') NOT NULL DEFAULT 'data',
+  admission_no INT NULL,
+  admission_at DATETIME NULL,
+  plan_id CHAR(36) NULL,
+  nip VARCHAR(12) NULL UNIQUE, -- Nomor Induk Peserta: tahun masuk + angkatan + kode program + nomor urut
   price_snapshot BIGINT NOT NULL,
   unique_code INT NOT NULL,
   invoice_no VARCHAR(30) NOT NULL UNIQUE,
   due_at DATETIME NOT NULL,
   cancelled_reason VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX (user_id, status), INDEX (batch_id, status),
+  INDEX (user_id, status), INDEX (batch_id, status), INDEX (program_id, status),
   FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (program_id) REFERENCES programs(id),
   FOREIGN KEY (batch_id) REFERENCES batches(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -91,6 +103,8 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS payments (
   id CHAR(36) PRIMARY KEY,
   registration_id CHAR(36) NOT NULL,
+  kind ENUM('pendaftaran','registrasi_ulang','cicilan') NOT NULL DEFAULT 'registrasi_ulang',
+  installment_id CHAR(36) NULL,
   amount_due BIGINT NOT NULL,
   amount_paid BIGINT NOT NULL,
   payer_name VARCHAR(120) NOT NULL,
@@ -109,10 +123,13 @@ CREATE TABLE IF NOT EXISTS payments (
 -- Bank mata pelajaran per pelatihan (program). Dikelola Akademik.
 CREATE TABLE IF NOT EXISTS subjects (
   id CHAR(36) PRIMARY KEY,
-  program_id CHAR(36) NOT NULL,
+  program_id CHAR(36) NULL, -- NULL = kelas gabungan, berlaku untuk semua pelatihan
+  code VARCHAR(12) NULL,
   name VARCHAR(120) NOT NULL,
-  kind ENUM('teori','praktik') NOT NULL,
-  hours INT NOT NULL,
+  kind ENUM('teori','praktik','teori_praktik') NOT NULL,
+  hours INT NOT NULL, -- jumlah jam per program
+  hours_per_meeting INT NULL,
+  meetings INT NULL,
   description VARCHAR(255) NOT NULL DEFAULT '',
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   UNIQUE (program_id, name),
@@ -275,12 +292,120 @@ CREATE TABLE IF NOT EXISTS participant_profiles (
   postal_code CHAR(5) NOT NULL,
   education VARCHAR(20) NOT NULL,
   occupation VARCHAR(80) NOT NULL,
-  emergency_name VARCHAR(120) NOT NULL,
-  emergency_relation VARCHAR(40) NOT NULL,
-  emergency_phone VARCHAR(30) NOT NULL,
-  photo_file_id CHAR(36) NULL,
-  ktp_file_id CHAR(36) NULL,
+  school VARCHAR(160) NULL,
   completed_at DATETIME NULL,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Penerimaan: opsi cicilan, ujian tulis, notifikasi dalam aplikasi
+CREATE TABLE IF NOT EXISTS payment_plans (
+  id CHAR(36) PRIMARY KEY,
+  program_id CHAR(36) NULL,
+  name VARCHAR(80) NOT NULL,
+  down_payment BIGINT NOT NULL,
+  installments INT NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (program_id) REFERENCES programs(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS installments (
+  id CHAR(36) PRIMARY KEY,
+  registration_id CHAR(36) NOT NULL,
+  seq INT NOT NULL,
+  amount BIGINT NOT NULL,
+  paid_amount BIGINT NOT NULL DEFAULT 0, -- terisi dari pembayaran terkonfirmasi, kelebihan memotong termin berikutnya
+  due_date DATE NOT NULL,
+  status ENUM('unpaid','partial','submitted','paid') NOT NULL DEFAULT 'unpaid',
+  UNIQUE (registration_id, seq),
+  FOREIGN KEY (registration_id) REFERENCES registrations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS question_banks (
+  id CHAR(36) PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS questions (
+  id CHAR(36) PRIMARY KEY,
+  bank_id CHAR(36) NOT NULL,
+  body TEXT NOT NULL,
+  options TEXT NOT NULL,
+  correct_idx TINYINT NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (bank_id),
+  FOREIGN KEY (bank_id) REFERENCES question_banks(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS exams (
+  id CHAR(36) PRIMARY KEY,
+  title VARCHAR(160) NOT NULL,
+  bank_id CHAR(36) NOT NULL,
+  program_id CHAR(36) NULL,
+  open_at DATETIME NOT NULL,
+  close_at DATETIME NOT NULL,
+  duration_min INT NOT NULL,
+  question_count INT NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (bank_id) REFERENCES question_banks(id),
+  FOREIGN KEY (program_id) REFERENCES programs(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS exam_attempts (
+  id CHAR(36) PRIMARY KEY,
+  exam_id CHAR(36) NOT NULL,
+  registration_id CHAR(36) NOT NULL,
+  question_ids TEXT NOT NULL,
+  answers TEXT NOT NULL,
+  started_at DATETIME NOT NULL,
+  finished_at DATETIME NULL,
+  score DECIMAL(5,2) NULL,
+  UNIQUE (exam_id, registration_id),
+  FOREIGN KEY (exam_id) REFERENCES exams(id),
+  FOREIGN KEY (registration_id) REFERENCES registrations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS notifications (
+  id CHAR(36) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  title VARCHAR(160) NOT NULL,
+  body VARCHAR(500) NOT NULL,
+  link VARCHAR(120) NULL,
+  read_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (user_id, created_at),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Biaya tambahan (jas almamater dan sejenisnya): masuk ke total yang dicicil peserta
+CREATE TABLE IF NOT EXISTS fee_items (
+  id CHAR(36) PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  amount BIGINT NOT NULL,
+  program_id CHAR(36) NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (program_id) REFERENCES programs(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Token ujian dipisah dari ujian: masa aktifnya dipilih admin saat token dibuat
+CREATE TABLE IF NOT EXISTS exam_tokens (
+  id CHAR(36) PRIMARY KEY,
+  exam_id CHAR(36) NOT NULL,
+  token VARCHAR(12) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (exam_id, token),
+  FOREIGN KEY (exam_id) REFERENCES exams(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Berkas registrasi ulang: KTP, ijazah, pas foto 3x4, KK, surat tidak buta warna. Diunggah setelah registrasi ulang dikonfirmasi.
+CREATE TABLE IF NOT EXISTS registration_documents (
+  id CHAR(36) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  kind ENUM('ktp','ijazah','foto','kk','buta_warna') NOT NULL,
+  file_id CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (user_id, kind),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (file_id) REFERENCES files(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

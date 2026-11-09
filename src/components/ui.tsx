@@ -1,5 +1,5 @@
 import { animate, motion, useInView, useReducedMotion } from 'motion/react'
-import { IconCheck, IconX } from '@tabler/icons-react'
+import { IconCheck, IconEye, IconEyeOff, IconX } from '@tabler/icons-react'
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Result } from '../lib/store'
 import type { RegStatus } from '../lib/types'
@@ -57,13 +57,29 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   finished: { label: 'Selesai', cls: 'bg-zinc-100 text-zinc-700 ring-zinc-200' },
   issued: { label: 'Sah', cls: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
   revoked: { label: 'Dicabut', cls: 'bg-red-50 text-red-800 ring-red-200' },
+  due: { label: 'Ada tagihan', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  confirm: { label: 'Menunggu konfirmasi', cls: 'bg-sky-50 text-sky-800 ring-sky-200' },
+  later: { label: 'Belum jatuh tempo', cls: 'bg-zinc-100 text-zinc-700 ring-zinc-200' },
+  nopackage: { label: 'Belum pilih paket', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  partial: { label: 'Dibayar sebagian', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  short: { label: 'Pembayaran kurang', cls: 'bg-red-50 text-red-800 ring-red-200' },
+  unpaid: { label: 'Belum dibayar', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  paid: { label: 'Lunas', cls: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  data: { label: 'Isi data diri', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  bayar_daftar: { label: 'Bayar pendaftaran', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  ujian: { label: 'Ujian tulis', cls: 'bg-sky-50 text-sky-800 ring-sky-200' },
+  menunggu_hasil: { label: 'Menunggu hasil', cls: 'bg-sky-50 text-sky-800 ring-sky-200' },
+  registrasi_ulang: { label: 'Registrasi ulang', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  aktif: { label: 'Peserta aktif', cls: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  tidak_lulus: { label: 'Tidak lulus', cls: 'bg-zinc-100 text-zinc-700 ring-zinc-200' },
 }
+export const KIND_LABEL: Record<string, string> = { pendaftaran: 'Pendaftaran', registrasi_ulang: 'Registrasi ulang', cicilan: 'Cicilan' }
 export function Badge({ status }: { status: RegStatus | string }) {
   const s = STATUS[status] ?? { label: status, cls: 'bg-zinc-100 text-zinc-700 ring-zinc-200' }
   return <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${s.cls}`}>{s.label}</span>
 }
 
-export function Modal({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ open, title, onClose, children, size = 'lg' }: { open: boolean; title: string; onClose: () => void; children: ReactNode; size?: 'lg' | 'xl' }) {
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -73,7 +89,7 @@ export function Modal({ open, title, onClose, children }: { open: boolean; title
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-brand-900/40 p-0 animate-fade sm:items-center sm:p-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="card max-h-[90dvh] w-full max-w-lg animate-pop overflow-y-auto rounded-b-none p-5 sm:rounded-b-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={title} className={`card max-h-[90dvh] w-full ${size === 'xl' ? 'max-w-5xl' : 'max-w-lg'} animate-pop overflow-y-auto rounded-b-none p-5 sm:rounded-b-2xl`} onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-lg font-bold">{title}</h2>
           <button className="btn-ghost !min-h-10 !px-2" onClick={onClose} aria-label="Tutup"><IconX size={18} /></button>
@@ -117,6 +133,20 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
   )
 }
 
+/** Input password dengan tombol lihat/sembunyikan. */
+export function PasswordInput({ className = '', ...p }: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const [show, setShow] = useState(false)
+  return (
+    <span className="relative block">
+      <input {...p} type={show ? 'text' : 'password'} className={`input pr-11 ${className}`} />
+      <button type="button" onClick={() => setShow(!show)} aria-label={show ? 'Sembunyikan password' : 'Lihat password'} aria-pressed={show}
+        className="absolute right-0 top-0 grid size-11 cursor-pointer place-items-center rounded-lg text-muted hover:text-brand-600">
+        {show ? <IconEyeOff size={20} /> : <IconEye size={20} />}
+      </button>
+    </span>
+  )
+}
+
 export function Empty({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
   return (
     <div className="px-6 py-12 text-center">
@@ -142,7 +172,7 @@ export function PageHeader({ title, sub, action }: { title: string; sub?: string
 export function Logo({ light = false }: { light?: boolean }) {
   return (
     <span className="flex items-center gap-2.5">
-      <span className="grid size-9 place-items-center rounded-lg bg-brass-500 font-display text-lg font-bold text-white">C</span>
+      <img src={light ? '/logo-putih.png' : '/logo.jpg'} alt="" className="h-11 w-auto" />
       <span className={`leading-tight ${light ? 'text-white' : 'text-ink'}`}>
         <span className="block font-display text-[15px] font-bold">Cimahi Institute</span>
         <span className={`block text-[11px] font-medium tracking-wide ${light ? 'text-brand-200' : 'text-muted'}`}>Hotel · Pelatihan Kerja</span>
@@ -161,4 +191,28 @@ export function useAct() {
     if (r.ok) { toast(okMsg); onOk?.() } else toast(r.error, 'err')
     return r.ok
   }
+}
+
+/**
+ * Tabel data. Layar lebar: tabel biasa. Layar sempit: tiap baris menjadi kartu dengan label kolom,
+ * sehingga tidak perlu menggeser ke samping. Label diambil dari head, jadi halaman tidak perlu mengubah isi sel.
+ */
+export function Table({ head, children, foot, bare = false }: { head: string[]; children: ReactNode; foot?: ReactNode; bare?: boolean }) {
+  const ref = useRef<HTMLTableElement>(null)
+  useEffect(() => {
+    ref.current?.querySelectorAll('tbody tr').forEach((tr) => {
+      Array.from(tr.children).forEach((td, i) => { if (td instanceof HTMLElement && !td.dataset.label) td.dataset.label = head[i] ?? '' })
+    })
+  })
+  return (
+    <div className={bare ? 'overflow-hidden rounded-xl border border-line' : 'card overflow-hidden'}>
+      <div className="overflow-x-auto">
+        <table ref={ref} className="rtable w-full text-left text-sm">
+          <thead><tr className="border-b border-line bg-brand-50 text-xs font-semibold uppercase tracking-wide text-brand-700">{head.map((h, i) => <th key={i} scope="col" className="px-4 py-3 whitespace-nowrap">{h}</th>)}</tr></thead>
+          <tbody>{children}</tbody>
+          {foot && <tfoot>{foot}</tfoot>}
+        </table>
+      </div>
+    </div>
+  )
 }

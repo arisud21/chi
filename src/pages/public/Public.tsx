@@ -21,7 +21,7 @@ export function PublicLayout() {
             ) : (
               <>
                 <Link to="/masuk" className="btn-ghost">Masuk</Link>
-                <Link to="/daftar" className="btn-primary hidden sm:inline-flex">Daftar</Link>
+                <Link to="/daftar" className="btn-primary hidden sm:inline-flex">Registrasi</Link>
               </>
             )}
           </nav>
@@ -54,7 +54,7 @@ export function ProgramDetail() {
   const p = s.programs.find((x) => x.slug === slug && !x.archived)
   if (!p) return <div className="mx-auto max-w-xl px-4 py-24 text-center"><p className="font-semibold">Program tidak ditemukan.</p><Link to="/" className="btn-ghost mt-4">Kembali</Link></div>
   const batches = s.batches.filter((b) => b.programId === p.id && b.status === 'open')
-  const subjects = s.subjects.filter((x) => x.programId === p.id && x.active)
+  const subjects = s.subjects.filter((x) => (x.programId === p.id || x.programId === '') && x.active)
   return (
     <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6">
       <Reveal>
@@ -82,7 +82,7 @@ export function ProgramDetail() {
           <Reveal key={b.id} delay={i * 0.07}>
             <div className="card flex flex-wrap items-center justify-between gap-3 p-5">
               <div><p className="font-semibold">{b.code}</p><p className="text-sm text-muted">{dateID(b.startDate)} sampai {dateID(b.endDate)} · {b.location}</p></div>
-              <div className="flex items-center gap-3"><span className="text-sm font-semibold text-brand-700">Sisa {b.quota - seatsTaken(s, b.id)} kursi</span><Link to={`/daftar?batch=${b.id}`} className="btn-primary">Daftar</Link></div>
+              <div className="flex items-center gap-3"><span className="text-sm font-semibold text-brand-700">Sisa {b.quota - seatsTaken(s, b.id)} kursi</span><Link to={`/daftar?batch=${b.id}`} className="btn-primary">Registrasi</Link></div>
             </div>
           </Reveal>
         ))}
