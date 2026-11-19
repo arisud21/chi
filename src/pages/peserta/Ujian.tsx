@@ -2,7 +2,7 @@ import { IconBell, IconClock } from '@tabler/icons-react'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Badge, Empty, Modal, PageHeader, dateTimeID, useToast } from '../../components/ui'
-import { finishExam, markNotificationsRead, saveExamAnswers, startExam, useStore, type ExamSession } from '../../lib/store'
+import { finishExam, markNotificationsRead, requestExamToken, saveExamAnswers, startExam, useStore, type ExamSession } from '../../lib/store'
 import type { Exam } from '../../lib/types'
 import { useMe } from './Peserta'
 
@@ -98,25 +98,35 @@ export function UjianSaya() {
   const [busy, setBusy] = useState(false)
   const [session, setSession] = useState<ExamSession | null>(null)
   const [finished, setFinished] = useState(false)
+  const [expiresAt, setExpiresAt] = useState('')
 
-  const begin = async (e: FormEvent) => {
-    e.preventDefault()
-    if (!pick) return
+  const launch = async (exam: Exam, code: string) => {
     setBusy(true)
-    const r = await startExam(pick.id, token)
+    const r = await startExam(exam.id, code)
     setBusy(false)
     if (!r.ok) return toast(r.error, 'err')
-    setSession(r.data as ExamSession); setPick(null); setToken('')
+    setSession(r.data as ExamSession); setPick(null); setToken(''); setExpiresAt('')
   }
+  /** Sistem memberi token otomatis. Ujian yang sudah berjalan langsung dilanjutkan tanpa token. */
+  const choose = async (exam: Exam) => {
+    setBusy(true)
+    const r = await requestExamToken(exam.id)
+    setBusy(false)
+    if (!r.ok) return toast(r.error, 'err')
+    const d = r.data as { token: string; expiresAt: string | null }
+    if (!d.token) return launch(exam, '')
+    setToken(d.token); setExpiresAt(d.expiresAt ?? ''); setPick(exam)
+  }
+  const begin = (e: FormEvent) => { e.preventDefault(); if (pick) launch(pick, token) }
 
   if (session) return <Taking session={session} onDone={() => { setSession(null); setFinished(true) }} />
   const now = Date.now()
   return (
     <>
-      <PageHeader title="Ujian tulis" sub="Masukkan token dari admin saat jadwal ujian dibuka. Soal diacak dari bank soal." />
+      <PageHeader title="Ujian online" sub="Token ujian diberikan otomatis oleh sistem saat jadwal ujian dibuka, tanpa perlu menghubungi admin. Soal diacak dari bank soal." />
       {finished && <div role="status" className="mb-5 rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-sm"><b>Jawaban Anda sudah dikumpulkan.</b> Hasil seleksi diumumkan admin lewat aplikasi dan email. Nilai tidak ditampilkan kepada peserta.</div>}
       {!reg ? (
-        <div className="card"><Empty title="Ujian belum terbuka" body="Ujian terbuka setelah data diri lengkap dan pembayaran pendaftaran dikonfirmasi." action={<Link to="/app" className="btn-primary">Lihat tahapan</Link>} /></div>
+        <div className="card"><Empty title="Ujian belum terbuka" body="Ujian online terbuka setelah data diri lengkap dan pembayaran pendaftaran dikonfirmasi." action={<Link to="/app" className="btn-primary">Lihat tahapan</Link>} /></div>
       ) : s.exams.length === 0 ? (
         <div className="card"><Empty title="Belum ada jadwal ujian" body="Admin belum mengatur ujian untuk Anda. Pemberitahuan dikirim ke aplikasi dan email saat jadwal tersedia." /></div>
       ) : (
@@ -136,8 +146,8 @@ export function UjianSaya() {
                 <div className="mt-4">
                   {e.mine === 'done' ? <p className="text-sm text-muted">Sudah dikerjakan.</p>
                     : reg.stage !== 'ujian' ? <p className="text-sm text-muted">Ujian sudah selesai.</p>
-                    : e.mine === 'running' ? <button className="btn-primary" onClick={() => setPick(e)}>Lanjutkan ujian</button>
-                    : open ? <button className="btn-primary" onClick={() => setPick(e)}>Mulai ujian</button>
+                    : e.mine === 'running' ? <button className="btn-primary" disabled={busy} onClick={() => choose(e)}>Lanjutkan ujian</button>
+                    : open ? <button className="btn-primary" disabled={busy} onClick={() => choose(e)}>Mulai ujian</button>
                     : <p className="text-sm text-muted">{ended ? 'Jadwal ujian sudah ditutup. Hubungi admin.' : 'Belum waktunya ujian.'}</p>}
                 </div>
               </div>
@@ -145,10 +155,10 @@ export function UjianSaya() {
           })}
         </div>
       )}
-      <Modal open={!!pick} title="Masukkan token ujian" onClose={() => setPick(null)}>
+      <Modal open={!!pick} title="Token ujian Anda" onClose={() => setPick(null)}>
         <form onSubmit={begin} className="space-y-4">
-          <p className="text-sm text-muted">Token diberikan admin atau pengawas. Waktu pengerjaan {pick?.durationMin} menit dan mulai berjalan setelah token benar.</p>
-          <input className="input text-center font-mono text-xl uppercase tracking-[0.3em]" required maxLength={12} autoFocus autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} aria-label="Token ujian" />
+          <p className="text-sm text-muted">Token dibuat otomatis oleh sistem dan sudah terisi. Berlaku 1 hari{expiresAt ? `, sampai ${dateTimeID(expiresAt)}` : ''}, tidak melewati jadwal tutup ujian. Waktu pengerjaan {pick?.durationMin} menit dan mulai berjalan setelah Anda menekan Mulai.</p>
+          <input className="input text-center font-mono text-xl uppercase tracking-[0.3em]" required readOnly value={token} aria-label="Token ujian" />
           <button className="btn-primary w-full" disabled={busy}>{busy ? 'Memeriksa…' : 'Mulai'}</button>
         </form>
       </Modal>

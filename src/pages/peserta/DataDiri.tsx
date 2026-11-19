@@ -1,12 +1,18 @@
 import { IconCircleCheck, IconLock } from '@tabler/icons-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Field, PageHeader, dateID, useAct } from '../../components/ui'
-import { getDistricts, getProvinces, getRegencies, saveProfile, useStore, type Area, type Result } from '../../lib/store'
+import { Field, PageHeader, ask, dateID, useAct } from '../../components/ui'
+import { changeEmail, getDistricts, getProvinces, getRegencies, saveProfile, useStore, type Area, type Result } from '../../lib/store'
 import type { Profile } from '../../lib/types'
 import { useMe } from './Peserta'
 
-export const EDUCATION = ['SD', 'SMP', 'SMA/SMK', 'D3', 'S1', 'S2', 'Lainnya']
+export const EDUCATION = ['SMA/SMK/MA', 'D1', 'D2', 'D3', 'S1/D4']
+export const INTERNSHIP_LABEL: Record<string, string> = { dalam_negeri: 'Dalam negeri', luar_negeri: 'Luar negeri' }
+export const INFO_SOURCE_LABEL: Record<string, string> = {
+  instagram: 'Media sosial Instagram', guru_sekolah: 'Guru sekolah', alumni: 'Alumni', siswa_chi: 'Siswa Cimahi Hotel Institute', keluarga: 'Keluarga', edufair: 'Edufair', lainnya: 'Lainnya',
+}
+/** Teks sumber informasi untuk ditampilkan; 'Lainnya' disertai isian pendaftar. */
+export const infoSourceText = (p?: Profile) => (!p?.infoSource ? '' : p.infoSource === 'lainnya' ? `Lainnya: ${p.infoSourceOther ?? ''}` : INFO_SOURCE_LABEL[p.infoSource] ?? p.infoSource)
 
 /** Pembayaran sudah dikonfirmasi tetapi data diri belum lengkap. */
 export function useNeedsProfile() {
@@ -26,8 +32,9 @@ export function LockedNotice() {
 }
 
 /** Formulir data diri. Dipakai peserta (sebelum registrasi ulang) dan admin (kapan saja). */
-export function ProfileForm({ user, profile, lockIdentity, submitLabel, onSubmit, onSaved, savedMessage }: {
-  user: { name: string; phone: string; nik?: string; birthDate?: string }
+export function ProfileForm({ user, profile, lockIdentity, canEditEmail = false, submitLabel, onSubmit, onSaved, savedMessage }: {
+  user: { name: string; phone: string; email?: string; nik?: string; birthDate?: string }
+  canEditEmail?: boolean
   profile?: Profile
   lockIdentity: boolean
   submitLabel: string
@@ -39,8 +46,10 @@ export function ProfileForm({ user, profile, lockIdentity, submitLabel, onSubmit
   const [f, setF] = useState({
     fullName: user.name, nik: profile?.nik ?? user.nik ?? '', birthPlace: profile?.birthPlace ?? '', birthDate: profile?.birthDate ?? user.birthDate ?? '', gender: profile?.gender ?? '',
     address: profile?.address ?? '', rt: profile?.rt ?? '', rw: profile?.rw ?? '', provinceId: profile?.provinceId ?? '', cityId: profile?.cityId ?? '', districtId: profile?.districtId ?? '', postalCode: profile?.postalCode ?? '',
-    phone: user.phone, school: profile?.school ?? '', education: profile?.education ?? '', occupation: profile?.occupation ?? '',
+    phone: user.phone, email: user.email ?? '', school: profile?.school ?? '', education: profile?.education ?? '', occupation: profile?.occupation ?? '',
+    internshipPref: (profile?.internshipPref ?? '') as string, infoSource: profile?.infoSource ?? '', infoSourceOther: profile?.infoSourceOther ?? '',
   })
+  const [grooming, setGrooming] = useState(!!profile?.groomingAgreed)
   const set = (k: keyof typeof f) => (e: any) => setF({ ...f, [k]: e.target.value })
   const [provinces, setProvinces] = useState<Area[]>([])
   const [cities, setCities] = useState<Area[]>([])
@@ -50,18 +59,19 @@ export function ProfileForm({ user, profile, lockIdentity, submitLabel, onSubmit
   useEffect(() => { setCities([]); if (f.provinceId) getRegencies(f.provinceId).then(setCities).catch(() => setAreaError(true)) }, [f.provinceId])
   useEffect(() => { setDistricts([]); if (f.cityId) getDistricts(f.cityId).then(setDistricts).catch(() => setAreaError(true)) }, [f.cityId])
   const nikBad = f.nik !== '' && !/^\d{16}$/.test(f.nik)
-  const submit = (e: FormEvent) => { e.preventDefault(); act(onSubmit(f), savedMessage, onSaved) }
+  const submit = (e: FormEvent) => { e.preventDefault(); act(onSubmit({ ...f, ...(canEditEmail ? {} : { email: undefined as unknown as string }), groomingAgreed: grooming ? '1' : '0', infoSourceOther: f.infoSource === 'lainnya' ? f.infoSourceOther : '' }), savedMessage, onSaved) }
 
   return (
     <form onSubmit={submit} className="space-y-5">
       <section className="card grid gap-4 p-5 sm:grid-cols-2">
         <h2 className="font-bold sm:col-span-2">Identitas</h2>
-        <div className="sm:col-span-2"><Field label="Nama lengkap sesuai KTP" hint="Nama ini dipakai di sertifikat."><input className="input" required value={f.fullName} onChange={set('fullName')} /></Field></div>
+        <div className="sm:col-span-2"><Field label="Nama lengkap sesuai KTP" hint="Nama ini dipakai di surat kelulusan dan transkrip."><input className="input" required value={f.fullName} onChange={set('fullName')} /></Field></div>
         <Field label="NIK" hint={nikBad ? 'NIK harus 16 digit angka.' : '16 digit sesuai KTP.'}><input className={`input font-mono ${nikBad ? '!border-red-500' : ''} read-only:bg-brand-50`} readOnly={lockIdentity && !!user.nik} required inputMode="numeric" maxLength={16} value={f.nik} onChange={(e) => setF({ ...f, nik: e.target.value.replace(/\D/g, '') })} /></Field>
         <Field label="Jenis kelamin"><select className="input" required value={f.gender} onChange={set('gender')}><option value="">Pilih</option><option value="L">Laki-laki</option><option value="P">Perempuan</option></select></Field>
         <Field label="Tempat lahir"><input className="input" required value={f.birthPlace} onChange={set('birthPlace')} /></Field>
         <Field label="Tanggal lahir"><input className="input read-only:bg-brand-50" type="date" required readOnly={lockIdentity && !!user.birthDate} value={f.birthDate} onChange={set('birthDate')} /></Field>
         <Field label="Nomor telepon aktif (WhatsApp)"><input className="input" type="tel" required value={f.phone} onChange={set('phone')} /></Field>
+        {canEditEmail && <div className="sm:col-span-2"><Field label="Email (untuk masuk)" hint="Hanya Super Admin yang dapat mengubah. Peserta masuk dengan email baru ini."><input className="input" type="email" required value={f.email} onChange={set('email')} autoComplete="off" /></Field></div>}
       </section>
 
       <section className="card grid gap-4 p-5 sm:grid-cols-2">
@@ -98,6 +108,26 @@ export function ProfileForm({ user, profile, lockIdentity, submitLabel, onSubmit
         <Field label="Pekerjaan saat ini" hint="Tulis 'Belum bekerja' bila belum."><input className="input" required value={f.occupation} onChange={set('occupation')} /></Field>
       </section>
 
+      <section className="card grid gap-4 p-5 sm:grid-cols-2">
+        <h2 className="font-bold sm:col-span-2">Magang, grooming, dan informasi pendaftaran</h2>
+        <fieldset className="sm:col-span-2">
+          <legend className="label">Kesediaan penempatan magang</legend>
+          <div className="mt-1 flex flex-wrap gap-x-6 gap-y-2">
+            {Object.entries(INTERNSHIP_LABEL).map(([v, l]) => (
+              <label key={v} className="flex min-h-11 items-center gap-2 text-sm"><input type="radio" name="internshipPref" required className="size-4 accent-brand-600" checked={f.internshipPref === v} onChange={() => setF({ ...f, internshipPref: v })} />{l}</label>
+            ))}
+          </div>
+        </fieldset>
+        <label className="flex items-start gap-3 text-sm sm:col-span-2"><input type="checkbox" required checked={grooming} onChange={(e) => setGrooming(e.target.checked)} className="mt-1 size-4 accent-brand-600" />Saya bersedia menjaga standar grooming sesuai ketentuan Cimahi Hotel Institute.</label>
+        <Field label="Mengetahui informasi pendaftaran dari">
+          <select className="input" required value={f.infoSource} onChange={set('infoSource')}>
+            <option value="">Pilih</option>
+            {Object.entries(INFO_SOURCE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </Field>
+        {f.infoSource === 'lainnya' && <Field label="Sebutkan sumber lainnya"><input className="input" required maxLength={100} value={f.infoSourceOther} onChange={set('infoSourceOther')} /></Field>}
+      </section>
+
       <button className="btn-primary w-full sm:w-auto sm:px-10" disabled={nikBad}>{submitLabel}</button>
     </form>
   )
@@ -112,6 +142,7 @@ function LockedProfile() {
   const rows: [string, string][] = [
     ['Nama lengkap', me.name], ['NIK', me.nik ?? p?.nik ?? ''], ['Tanggal lahir', me.birthDate ? dateID(me.birthDate) : ''], ['Tempat lahir', p?.birthPlace ?? ''], ['Jenis kelamin', L(p?.gender)], ['Telepon', me.phone],
     ['Pendidikan', p?.education ?? ''], ['Asal sekolah', p?.school ?? ''], ['Pekerjaan', p?.occupation ?? ''],
+    ['Kesediaan magang', INTERNSHIP_LABEL[p?.internshipPref ?? ''] ?? ''], ['Standar grooming', p?.groomingAgreed ? 'Bersedia' : ''], ['Mengetahui pendaftaran dari', infoSourceText(p)],
     ['Alamat', p ? `${p.address}, RT ${p.rt}/RW ${p.rw}` : ''], ['Kecamatan', p?.district ?? ''], ['Kota atau kabupaten', p?.city ?? ''], ['Provinsi', p?.province ?? ''], ['Kode pos', p?.postalCode ?? ''],
   ]
   return (
@@ -127,12 +158,26 @@ function LockedProfile() {
   )
 }
 
+/** Peserta buatan admin boleh mengganti email akunnya satu kali; hak ini tetap ada sampai email benar-benar diganti. */
+function EmailAkun({ email }: { email: string }) {
+  const act = useAct()
+  const [em, setEm] = useState(email)
+  return (
+    <form className="card mb-4 flex flex-wrap items-end gap-3 p-5" onSubmit={async (e) => { e.preventDefault(); if (await ask(`Ganti email menjadi ${em.trim()}? Anda tidak dapat mengubahnya lagi sesudah ini.`, { title: 'Ganti email', confirmLabel: 'Ya, ganti email' })) act(changeEmail(em), 'Email akun diganti. Gunakan email baru saat masuk.') }}>
+      <div className="min-w-60 flex-1"><Field label="Email akun" hint="Diisi oleh admin. Anda hanya dapat mengubahnya satu kali."><input className="input" type="email" required value={em} onChange={(e) => setEm(e.target.value)} autoComplete="email" /></Field></div>
+      <button className="btn-primary" disabled={em.trim().toLowerCase() === email.toLowerCase()}>Ganti email</button>
+    </form>
+  )
+}
+
 export function DataDiri() {
   const { me, regs } = useMe()
   const profile = useStore((s) => s.profiles.find((p) => p.userId === me.id))
   const nav = useNavigate()
   const has = regs.some((r) => ['pending_payment', 'active', 'completed'].includes(r.status))
-  const locked = regs.some((r) => r.stage === 'aktif')
+  const active = regs.some((r) => r.stage === 'aktif')
+  // Terkunci setelah registrasi ulang. Peserta didik yang ditambahkan atau diimpor admin tetap bisa melengkapinya sekali (sama dengan server).
+  const locked = active && !!me.profileDone
 
   if (!has) {
     return (
@@ -142,14 +187,17 @@ export function DataDiri() {
       </>
     )
   }
-  if (locked) return <><PageHeader title="Data diri" /><LockedProfile /></>
+  if (locked) return <><PageHeader title="Data diri" />{me.emailChangeable && <EmailAkun key={me.email} email={me.email} />}<LockedProfile /></>
 
   return (
     <>
-      <PageHeader title="Data diri" sub={me.profileDone ? 'Data diri Anda sudah lengkap. Anda masih bisa memperbaruinya sampai registrasi ulang dikonfirmasi.' : 'Setelah lengkap, Anda diminta membayar biaya pendaftaran. Data dipakai untuk administrasi, surat kelulusan, dan sertifikat.'} />
+      <PageHeader title="Data diri" sub={active
+        ? 'Akun peserta didik Anda sudah aktif. Lengkapi data diri berikut, lalu unggah berkas agar ruang belajar terbuka. Periksa dengan teliti: setelah disimpan, perubahan hanya lewat admin.'
+        : me.profileDone ? 'Data diri Anda sudah lengkap. Anda masih bisa memperbaruinya sampai registrasi ulang dikonfirmasi.' : 'Setelah lengkap, Anda diminta membayar biaya pendaftaran. Data dipakai untuk administrasi dan surat kelulusan.'} />
       {me.profileDone && <p className="mb-4 flex items-center gap-2 rounded-lg bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"><IconCircleCheck size={18} />Data diri lengkap. <Link to="/app" className="underline">Lihat tahapan</Link></p>}
-      <ProfileForm user={me} profile={profile} lockIdentity submitLabel={me.profileDone ? 'Perbarui data diri' : 'Simpan dan lanjut ke pembayaran'}
-        onSubmit={saveProfile} savedMessage={me.profileDone ? 'Data diri diperbarui.' : 'Data diri tersimpan. Lanjut ke pembayaran pendaftaran.'} onSaved={() => { if (!me.profileDone) nav('/app') }} />
+      {me.emailChangeable && <EmailAkun key={me.email} email={me.email} />}
+      <ProfileForm user={me} profile={profile} lockIdentity submitLabel={active ? 'Simpan data diri' : me.profileDone ? 'Perbarui data diri' : 'Simpan dan lanjut ke pembayaran'}
+        onSubmit={saveProfile} savedMessage={active ? 'Data diri tersimpan. Lanjutkan dengan mengunggah berkas.' : me.profileDone ? 'Data diri diperbarui.' : 'Data diri tersimpan. Lanjut ke pembayaran pendaftaran.'} onSaved={() => { if (!me.profileDone) nav('/app') }} />
     </>
   )
 }

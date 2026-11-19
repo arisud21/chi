@@ -133,7 +133,7 @@ console.log('Hapus program dan angkatan')
 const progs = (await adm.state()).programs
 const withBatch = progs.find((p) => p.slug === 'front-office')
 check('program yang punya angkatan tidak bisa dihapus', (await adm.rpc('deleteProgram', withBatch.id)).ok === false)
-const newProg = { id: crypto.randomUUID(), slug: 'uji-hapus', title: 'Program Uji Hapus', category: 'Uji', shortDesc: 'x', description: '', durationHours: 10, price: 1000, active: true, archived: false, rules: { theoryWeight: 30, practicalWeight: 70, passingScore: 70, minAttendance: 80 } }
+const newProg = { id: crypto.randomUUID(), slug: 'uji-hapus', title: 'Program Uji Hapus', category: 'Uji', shortDesc: 'x', description: '', durationHours: 10, price: 1000, active: true, archived: false, rules: { passingScore: 70, minAttendance: 80 } }
 check('buat program kosong', (await adm.rpc('saveProgram', newProg)).ok === true)
 const bId = crypto.randomUUID()
 await adm.rpc('saveBatch', { id: bId, programId: newProg.id, code: 'UJI-HAPUS-' + (Date.now() % 100000), startDate: '2027-03-01', endDate: '2027-04-01', quota: 5, status: 'draft' })

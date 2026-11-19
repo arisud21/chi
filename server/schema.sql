@@ -1,4 +1,4 @@
--- Skema MySQL 8 / MariaDB 10.4 untuk SIM Cimahi Institute Hotel (PRD §9). JSON disimpan sebagai TEXT agar portabel.
+-- Skema MySQL 8 / MariaDB 10.4 untuk SIM Cimahi Hotel Institute (PRD §9). JSON disimpan sebagai TEXT agar portabel.
 CREATE TABLE IF NOT EXISTS users (
   id CHAR(36) PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
   failed_login_count INT NOT NULL DEFAULT 0,
   locked_until DATETIME NULL,
   last_login_at DATETIME NULL,
+  email_change_left TINYINT(1) NOT NULL DEFAULT 0, -- 1 = peserta buatan admin, boleh ganti email satu kali saat masuk pertama
+  instructor_program VARCHAR(500) NULL, -- khusus instruktur: id program dan/atau 'gabungan', dipisah koma
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -59,6 +61,9 @@ CREATE TABLE IF NOT EXISTS batches (
   end_time TIME NULL,
   planned_sessions INT NOT NULL DEFAULT 0,
   angkatan TINYINT NULL, -- angkatan ke-berapa (1 sampai 9), dipakai di NIP
+  theory_weight INT NULL, -- bobot khusus angkatan dari instruktur wali; NULL = bobot default program
+  practical_weight INT NULL,
+  free_reg_fee TINYINT(1) NOT NULL DEFAULT 0, -- angkatan bebas biaya pendaftaran (dianggap lunas); biaya registrasi tetap ditagih
   FOREIGN KEY (program_id) REFERENCES programs(id),
   FOREIGN KEY (instructor_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -81,6 +86,10 @@ CREATE TABLE IF NOT EXISTS registrations (
   invoice_no VARCHAR(30) NOT NULL UNIQUE,
   due_at DATETIME NOT NULL,
   cancelled_reason VARCHAR(255) NULL,
+  source VARCHAR(10) NULL, -- 'admin' = ditambahkan/diimpor admin; NULL = daftar sendiri
+  followup_at DATETIME NULL, -- pendaftar mundur sudah dihubungi (follow up) lewat WhatsApp pada waktu ini; NULL = belum
+  followup_by CHAR(36) NULL, -- staf yang menandai follow up
+  resumed_at DATETIME NULL, -- terakhir kali pendaftar menekan Lanjutkan proses; hitungan 2 minggu mundur otomatis dimulai ulang dari sini
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (user_id, status), INDEX (batch_id, status), INDEX (program_id, status),
   FOREIGN KEY (user_id) REFERENCES users(id),
@@ -114,6 +123,7 @@ CREATE TABLE IF NOT EXISTS payments (
   reject_reason VARCHAR(255) NULL,
   receipt_no VARCHAR(40) NULL UNIQUE,
   verified_by CHAR(36) NULL,
+  note VARCHAR(255) NULL, -- catatan pembayaran yang dicatat langsung oleh keuangan
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (status, created_at),
   FOREIGN KEY (registration_id) REFERENCES registrations(id),
@@ -141,6 +151,17 @@ CREATE TABLE IF NOT EXISTS batch_subjects (
   batch_id CHAR(36) NOT NULL,
   subject_id CHAR(36) NOT NULL,
   sessions_planned INT NOT NULL,
+  instructor_id CHAR(36) NULL, -- instruktur pengampu mata pelajaran ini di angkatan ini
+  schedule_days VARCHAR(40) NOT NULL DEFAULT '',
+  start_time TIME NULL,
+  end_time TIME NULL,
+  room VARCHAR(160) NOT NULL DEFAULT '', -- ruang kelas
+  group_id CHAR(36) NULL, -- kelas gabungan: jadwal yang sama di beberapa angkatan lintas program
+  -- Bobot nilai mata pelajaran ini (persen, jumlah 100), diatur instruktur pengampu atau Akademik. NULL = pakai bobot default dari Akademik.
+  w_absensi INT NULL,
+  w_tugas INT NULL,
+  w_teori INT NULL,
+  w_praktik INT NULL,
   PRIMARY KEY (batch_id, subject_id),
   FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
   FOREIGN KEY (subject_id) REFERENCES subjects(id)
@@ -173,6 +194,7 @@ CREATE TABLE IF NOT EXISTS materials (
 CREATE TABLE IF NOT EXISTS assignments (
   id CHAR(36) PRIMARY KEY,
   batch_id CHAR(36) NOT NULL,
+  subject_id CHAR(36) NULL, -- mata pelajaran tugas ini; NULL = tugas umum angkatan
   title VARCHAR(160) NOT NULL,
   description TEXT,
   due_at DATETIME NOT NULL,
@@ -207,11 +229,24 @@ CREATE TABLE IF NOT EXISTS grades (
   theory DECIMAL(5,1) NOT NULL DEFAULT 0,
   practical DECIMAL(5,1) NOT NULL DEFAULT 0,
   attendance_pct DECIMAL(5,1) NOT NULL DEFAULT 0,
+  final_score DECIMAL(5,1) NULL, -- rata-rata nilai akhir semua mata pelajaran; NULL = rumus bobot teori/praktik program (data lama)
   status ENUM('draft','submitted','validated') NOT NULL DEFAULT 'draft',
   passed TINYINT(1) NULL,
   override_reason VARCHAR(255) NULL,
   validated_by CHAR(36) NULL,
   validated_at DATETIME NULL,
+  FOREIGN KEY (registration_id) REFERENCES registrations(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Nilai tugas, teori (UTS), dan praktik (UAS) per mata pelajaran (skala 0-100), diisi manual instruktur pengampu. NULL = belum diisi.
+-- Absensi tidak disimpan di sini: dihitung otomatis dari rekap kehadiran.
+CREATE TABLE IF NOT EXISTS subject_grades (
+  registration_id CHAR(36) NOT NULL,
+  subject_id CHAR(36) NOT NULL,
+  task DECIMAL(5,1) NULL,
+  theory DECIMAL(5,1) NULL,
+  practical DECIMAL(5,1) NULL,
+  PRIMARY KEY (registration_id, subject_id),
   FOREIGN KEY (registration_id) REFERENCES registrations(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -293,6 +328,10 @@ CREATE TABLE IF NOT EXISTS participant_profiles (
   education VARCHAR(20) NOT NULL,
   occupation VARCHAR(80) NOT NULL,
   school VARCHAR(160) NULL,
+  internship_pref ENUM('dalam_negeri','luar_negeri') NULL, -- kesediaan penempatan magang
+  grooming_agreed TINYINT(1) NOT NULL DEFAULT 0, -- bersedia menjaga standar grooming CHI
+  info_source VARCHAR(30) NULL, -- dari mana pendaftar tahu pendaftaran
+  info_source_other VARCHAR(100) NULL, -- isian bila info_source = 'lainnya'
   completed_at DATETIME NULL,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -393,6 +432,7 @@ CREATE TABLE IF NOT EXISTS exam_tokens (
   token VARCHAR(12) NOT NULL,
   expires_at DATETIME NOT NULL,
   created_by CHAR(36) NULL,
+  registration_id CHAR(36) NULL, -- terisi bila token dibuat otomatis oleh sistem untuk satu pendaftar; NULL = token umum buatan admin
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (exam_id, token),
   FOREIGN KEY (exam_id) REFERENCES exams(id)
@@ -408,4 +448,106 @@ CREATE TABLE IF NOT EXISTS registration_documents (
   UNIQUE (user_id, kind),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (file_id) REFERENCES files(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Penempatan magang atau kerja, daftar perusahaan mitra, dan logbook harian magang.
+CREATE TABLE IF NOT EXISTS companies (
+  id CHAR(36) PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  category VARCHAR(60) NOT NULL DEFAULT 'Hotel',
+  address VARCHAR(255) NULL,
+  city VARCHAR(80) NULL,
+  country VARCHAR(80) NOT NULL DEFAULT 'Indonesia',
+  contact_name VARCHAR(120) NULL,
+  contact_phone VARCHAR(30) NULL,
+  contact_email VARCHAR(160) NULL,
+  notes VARCHAR(500) NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS placements (
+  id CHAR(36) PRIMARY KEY,
+  registration_id CHAR(36) NOT NULL,
+  company_id CHAR(36) NOT NULL,
+  kind ENUM('magang','kerja') NOT NULL DEFAULT 'magang',
+  position VARCHAR(120) NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NULL,
+  score DECIMAL(5,1) NULL, -- nilai magang (0-100), diinput Akademik setelah magang selesai; masuk transkrip akhir
+  status ENUM('berjalan','selesai','batal') NOT NULL DEFAULT 'berjalan',
+  notes VARCHAR(500) NULL,
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (registration_id),
+  FOREIGN KEY (registration_id) REFERENCES registrations(id) ON DELETE CASCADE,
+  FOREIGN KEY (company_id) REFERENCES companies(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS logbook_entries (
+  id CHAR(36) PRIMARY KEY,
+  placement_id CHAR(36) NOT NULL,
+  entry_date DATE NOT NULL,
+  activity TEXT NOT NULL,
+  learning VARCHAR(500) NULL,
+  hours DECIMAL(4,1) NOT NULL DEFAULT 8,
+  status ENUM('diajukan','disetujui','revisi') NOT NULL DEFAULT 'diajukan',
+  reviewer_note VARCHAR(500) NULL,
+  reviewed_by CHAR(36) NULL,
+  reviewed_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE (placement_id, entry_date),
+  FOREIGN KEY (placement_id) REFERENCES placements(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- Berita popup di beranda tiap role. audience berisi JSON array: "semua" atau nama role.
+CREATE TABLE IF NOT EXISTS news (
+  id CHAR(36) PRIMARY KEY,
+  title VARCHAR(160) NOT NULL,
+  body TEXT NOT NULL,
+  audience VARCHAR(300) NOT NULL,
+  starts_on DATE NULL,
+  ends_on DATE NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- CHI Today: kabar kegiatan untuk publik. is_featured = tampil di bagian Kegiatan pada landing page.
+CREATE TABLE IF NOT EXISTS chi_today (
+  id CHAR(36) PRIMARY KEY,
+  slug VARCHAR(180) NOT NULL UNIQUE,
+  title VARCHAR(160) NOT NULL,
+  summary VARCHAR(300) NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  tag VARCHAR(60) NOT NULL DEFAULT '',
+  event_date DATE NULL,
+  image_id CHAR(36) NULL,
+  image_src VARCHAR(120) NULL,
+  is_published TINYINT(1) NOT NULL DEFAULT 1,
+  is_featured TINYINT(1) NOT NULL DEFAULT 0,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS news_reads (
+  news_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  read_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (news_id, user_id),
+  FOREIGN KEY (news_id) REFERENCES news(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- Manajemen kas: transaksi manual (modal, pemasukan lain, kas keluar operasional). Kas masuk dari pembayaran peserta dihitung dari tabel payments.
+CREATE TABLE IF NOT EXISTS cash_transactions (
+  id CHAR(36) PRIMARY KEY,
+  direction ENUM('masuk','keluar') NOT NULL,
+  category VARCHAR(40) NOT NULL,
+  tx_date DATE NOT NULL,
+  amount DECIMAL(14,0) NOT NULL,
+  description VARCHAR(255) NOT NULL DEFAULT '',
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

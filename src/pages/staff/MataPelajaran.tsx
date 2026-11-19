@@ -5,7 +5,7 @@ import { deleteSubject, saveSubject, useStore } from '../../lib/store'
 import type { Subject } from '../../lib/types'
 import { ImporMapel, SUBJECT_KIND } from './ImporMapel'
 
-/** Bank mata pelajaran (Akademik): daftar pelajaran per pelatihan. Jadwal angkatan memilih dari sini. */
+/** Bank mata pelajaran (Akademik): daftar pelajaran per pelatihan. Jadwal pembelajaran memilih dari sini. */
 export function MataPelajaran() {
   const s = useStore((x) => x)
   const act = useAct()
@@ -22,7 +22,7 @@ export function MataPelajaran() {
 
   return (
     <>
-      <PageHeader title="Bank mata pelajaran" sub="Pilih pelatihan dulu, lalu kelola mata pelajarannya. Saat menyusun jadwal angkatan, Akademik memilih dari daftar ini."
+      <PageHeader title="Bank mata pelajaran" sub="Pilih pelatihan dulu, lalu kelola mata pelajarannya. Saat menyusun jadwal pembelajaran, Akademik memilih dari daftar ini."
         action={<div className="flex flex-wrap gap-2"><button className="btn-ghost" disabled={programs.length === 0} onClick={() => setImpor(true)}><IconFileImport size={18} />Impor dari spreadsheet</button><button className="btn-primary" disabled={!prog && !gabungan} onClick={() => setF({ id: newIdLike('sj'), programId: gabungan ? '' : programId, code: '', name: '', kind: 'teori', hours: 8, hoursPerMeeting: null, meetings: null, description: '', active: true })}><IconPlus size={18} />Mata pelajaran</button></div>} />
 
       <div className="mb-4 flex flex-wrap items-end gap-4">
@@ -33,7 +33,7 @@ export function MataPelajaran() {
         {prog && <p className="pb-2.5 text-sm text-muted">Durasi program <b className="text-ink">{prog.durationHours} jam</b> · jam mata pelajaran aktif (termasuk kelas gabungan) <b className={totalHours === prog.durationHours ? 'text-emerald-700' : 'text-amber-700'}>{totalHours} jam</b></p>}
       </div>
 
-      {list.length === 0 ? <div className="card"><Empty title="Belum ada mata pelajaran" body="Tambahkan mata pelajaran untuk pelatihan ini agar bisa dipilih di jadwal angkatan." /></div> : (
+      {list.length === 0 ? <div className="card"><Empty title="Belum ada mata pelajaran" body="Tambahkan mata pelajaran untuk pelatihan ini agar bisa dipilih di jadwal pembelajaran." /></div> : (
         <Table head={["Kode", "Mata pelajaran", "Jenis", "Jam/pertemuan", "Pertemuan", "Jam total", "Dipakai", "Status", ""]}>
          {list.map((x) => (
            <tr key={x.id}>
@@ -52,7 +52,7 @@ export function MataPelajaran() {
           <p className="rounded-lg bg-canvas p-3 text-sm">Pelatihan: <b>{f.programId === '' ? 'Semua pelatihan (kelas gabungan)' : programs.find((p) => p.id === f.programId)?.title}</b></p>
           <Field label="Nama mata pelajaran"><input className="input" required maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Jenis"><select className="input" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as Subject['kind'] })}><option value="teori">Teori</option><option value="praktik">Praktik</option><option value="teori_praktik">Teori dan praktik</option></select></Field>
+            <Field label="Jenis"><select className="input" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as Subject['kind'] })}><option value="teori">Teori</option><option value="teori_praktik">Teori dan praktik</option>{f.kind === 'praktik' && <option value="praktik">Praktik (data lama)</option>}</select></Field>
             <Field label="Kode" hint="Maksimal 12 karakter."><input className="input font-mono uppercase" maxLength={12} value={f.code ?? ''} onChange={(e) => setF({ ...f, code: e.target.value })} /></Field>
             <Field label="Jam per pertemuan"><input className="input" type="number" min={1} max={24} value={f.hoursPerMeeting ?? ''} onChange={(e) => setF({ ...f, hoursPerMeeting: e.target.value === '' ? null : +e.target.value })} /></Field>
             <Field label="Jumlah pertemuan"><input className="input" type="number" min={1} max={60} value={f.meetings ?? ''} onChange={(e) => setF({ ...f, meetings: e.target.value === '' ? null : +e.target.value })} /></Field>
@@ -67,7 +67,7 @@ export function MataPelajaran() {
       <Modal open={!!del} title="Hapus mata pelajaran?" onClose={() => setDel(null)}>
         {del && <div className="space-y-4">
           <p className="text-sm"><b>{del.name}</b> dihapus permanen.</p>
-          <p className="rounded-lg bg-canvas p-3 text-xs text-muted">Hanya bisa bila belum dipakai di jadwal angkatan mana pun. Kalau sudah dipakai, nonaktifkan lewat Ubah.</p>
+          <p className="rounded-lg bg-canvas p-3 text-xs text-muted">Hanya bisa bila belum dipakai di jadwal pembelajaran mana pun. Kalau sudah dipakai, nonaktifkan lewat Ubah.</p>
           <div className="flex gap-2"><button className="btn-danger" onClick={() => act(deleteSubject(del.id), 'Mata pelajaran dihapus.', () => setDel(null))}>Ya, hapus</button><button className="btn-ghost" onClick={() => setDel(null)}>Batal</button></div>
         </div>}
       </Modal>

@@ -1,5 +1,6 @@
 import { animate, motion, useInView, useReducedMotion } from 'motion/react'
 import { IconCheck, IconEye, IconEyeOff, IconX } from '@tabler/icons-react'
+import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Result } from '../lib/store'
 import type { RegStatus } from '../lib/types'
@@ -67,7 +68,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   paid: { label: 'Lunas', cls: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
   data: { label: 'Isi data diri', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
   bayar_daftar: { label: 'Bayar pendaftaran', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
-  ujian: { label: 'Ujian tulis', cls: 'bg-sky-50 text-sky-800 ring-sky-200' },
+  ujian: { label: 'Ujian online', cls: 'bg-sky-50 text-sky-800 ring-sky-200' },
   menunggu_hasil: { label: 'Menunggu hasil', cls: 'bg-sky-50 text-sky-800 ring-sky-200' },
   registrasi_ulang: { label: 'Registrasi ulang', cls: 'bg-amber-50 text-amber-800 ring-amber-200' },
   aktif: { label: 'Peserta aktif', cls: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
@@ -80,21 +81,70 @@ export function Badge({ status }: { status: RegStatus | string }) {
 }
 
 export function Modal({ open, title, onClose, children, size = 'lg' }: { open: boolean; title: string; onClose: () => void; children: ReactNode; size?: 'lg' | 'xl' }) {
+  const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden' // halaman di belakang tidak ikut bergulir
+    return () => { window.removeEventListener('keydown', h); document.body.style.overflow = prev }
   }, [open, onClose])
+  /** Isian yang difokuskan digulirkan ke tengah area modal agar tidak tertutup papan ketik handphone. */
+  const keepVisible = (e: React.FocusEvent) => {
+    const el = e.target as HTMLElement
+    if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return
+    setTimeout(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300)
+  }
   if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-brand-900/40 p-0 animate-fade sm:items-center sm:p-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className={`card max-h-[90dvh] w-full ${size === 'xl' ? 'max-w-5xl' : 'max-w-lg'} animate-pop overflow-y-auto rounded-b-none p-5 sm:rounded-b-2xl`} onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-bold">{title}</h2>
+  // Dirender ke body: induk beranimasi (mis. header halaman) menjadikan elemen fixed terkurung di dalamnya.
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-end justify-center overflow-hidden bg-brand-900/40 animate-fade sm:items-center sm:p-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} onFocus={keepVisible}
+        className={`card flex max-h-[92dvh] w-full flex-col ${size === 'xl' ? 'max-w-5xl' : 'max-w-lg'} animate-pop rounded-b-none pb-[env(safe-area-inset-bottom)] sm:max-h-[90dvh] sm:rounded-b-2xl sm:pb-0`} onClick={(e) => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3">
+          <h2 className="min-w-0 text-lg font-bold">{title}</h2>
           <button className="btn-ghost !min-h-10 !px-2" onClick={onClose} aria-label="Tutup"><IconX size={18} /></button>
         </div>
-        {children}
+        <div ref={body} className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-pb-24 p-5">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+/* ---------------- Dialog konfirmasi (pengganti window.confirm) ---------------- */
+type AskOpts = { title?: string; confirmLabel?: string; cancelLabel?: string; danger?: boolean }
+type AskReq = AskOpts & { message: string; resolve: (ok: boolean) => void }
+let askHandler: ((r: AskReq) => void) | null = null
+
+/** Tampilkan dialog konfirmasi bertema aplikasi. Hasilnya true bila pengguna menyetujui. Pemakaian: `if (await ask('Hapus data ini?')) ...` */
+export function ask(message: string, opts: AskOpts = {}): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!askHandler) return resolve(false)
+    askHandler({ message, ...opts, resolve })
+  })
+}
+
+function ConfirmHost() {
+  const [req, setReq] = useState<AskReq | null>(null)
+  const okRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => { askHandler = setReq; return () => { askHandler = null } }, [])
+  useEffect(() => { if (req) okRef.current?.focus() }, [req])
+  if (!req) return null
+  const destructive = req.danger ?? /^(hapus|batalkan|nyatakan|tolak)/i.test(req.message)
+  const close = (ok: boolean) => { req.resolve(ok); setReq(null) }
+  const defaultOk = /^hapus/i.test(req.message) ? 'Ya, hapus' : /^batalkan/i.test(req.message) ? 'Ya, batalkan' : 'Ya, lanjutkan'
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-brand-900/40 p-4 animate-fade" onClick={() => close(false)}
+      onKeyDown={(e) => e.key === 'Escape' && close(false)}>
+      <div role="alertdialog" aria-modal="true" aria-label={req.title ?? 'Konfirmasi'} className="card w-full max-w-sm animate-pop p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-bold">{req.title ?? (destructive ? 'Konfirmasi tindakan' : 'Konfirmasi')}</h2>
+        <p className="mt-2 text-sm text-muted">{req.message}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button className="btn-ghost" onClick={() => close(false)}>{req.cancelLabel ?? 'Batal'}</button>
+          <button ref={okRef} className={destructive ? 'btn-danger' : 'btn-primary'} onClick={() => close(true)}>{req.confirmLabel ?? defaultOk}</button>
+        </div>
       </div>
     </div>
   )
@@ -112,6 +162,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
+      <ConfirmHost />
       <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex flex-col items-center gap-2 px-4" aria-live="polite">
         {items.map((i) => (
           <div key={i.id} className={`pointer-events-auto flex max-w-md animate-pop items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg ${i.kind === 'ok' ? 'bg-brand-700' : 'bg-red-700'}`}>
@@ -130,6 +181,23 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
       {children}
       {hint && <span className="mt-1 block text-xs text-muted">{hint}</span>}
     </label>
+  )
+}
+
+/** Teks angka berpemisah ribuan titik (4000000 menjadi 4.000.000). Kosong untuk nol bila zeroEmpty. */
+export const fmtMoney = (n: number | string | null | undefined, zeroEmpty = false) => {
+  const v = Math.round(Number(n))
+  return Number.isFinite(v) && !(zeroEmpty && v === 0) ? v.toLocaleString('id-ID') : ''
+}
+
+/**
+ * Isian nominal rupiah dengan pemisah ribuan otomatis. Pengguna cukup mengetik angka; titik atau koma yang diketik atau
+ * ditempel (4.000.000 atau 4,000,000) diabaikan. Nilai ke luar selalu bilangan bulat.
+ */
+export function MoneyInput({ value, onValue, zeroEmpty = false, className = '', ...p }: { value: number | string; onValue: (n: number) => void; zeroEmpty?: boolean } & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type' | 'min' | 'max'>) {
+  return (
+    <input {...p} type="text" inputMode="numeric" autoComplete="off" className={`input tabular-nums ${className}`} value={fmtMoney(value, zeroEmpty)}
+      onChange={(e) => { const d = e.target.value.replace(/\D/g, '').slice(0, 13); onValue(d ? Number(d) : 0) }} />
   )
 }
 
@@ -174,8 +242,8 @@ export function Logo({ light = false }: { light?: boolean }) {
     <span className="flex items-center gap-2.5">
       <img src={light ? '/logo-putih.png' : '/logo.jpg'} alt="" className="h-11 w-auto" />
       <span className={`leading-tight ${light ? 'text-white' : 'text-ink'}`}>
-        <span className="block font-display text-[15px] font-bold">Cimahi Institute</span>
-        <span className={`block text-[11px] font-medium tracking-wide ${light ? 'text-brand-200' : 'text-muted'}`}>Hotel · Pelatihan Kerja</span>
+        <span className="block whitespace-nowrap font-display text-[15px] font-bold">Cimahi Hotel Institute</span>
+        <span className={`block whitespace-nowrap text-[10.5px] font-medium italic tracking-wide ${light ? 'text-brand-200' : 'text-muted'}`}>Shaping Global Hospitality</span>
       </span>
     </span>
   )

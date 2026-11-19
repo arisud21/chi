@@ -1,17 +1,16 @@
-# Panduan Uji: Dari Pendaftaran sampai Sertifikat
+﻿# Panduan Uji: Dari Pendaftaran sampai Kelulusan
 
-Urutan ini menjalankan satu peserta melewati seluruh siklus: **daftar, bayar, verifikasi, data diri, belajar, nilai, sertifikat, cek keaslian**. Ikuti berurutan, karena tiap langkah bergantung pada langkah sebelumnya.
+Urutan ini menjalankan satu peserta melewati seluruh siklus: **daftar, bayar, verifikasi, data diri, belajar, nilai, cek status peserta**. Ikuti berurutan, karena tiap langkah bergantung pada langkah sebelumnya.
 
 ## Sebelum mulai
 
-Jalankan (dua terminal, XAMPP MySQL harus menyala):
+Jalankan (satu terminal, XAMPP MySQL harus menyala):
 
 ```
-cd server && npm start        # API di http://localhost:4000
-npm run dev                   # aplikasi di http://localhost:5173  (folder cih-sim)
+npm run dev                   # aplikasi dan API di http://localhost:4000  (folder chi-sim)
 ```
 
-Buka **http://localhost:5173**. Gunakan satu jendela browser biasa untuk peserta dan satu jendela **penyamaran (incognito)** untuk staf, supaya tidak perlu keluar-masuk akun.
+Buka **http://localhost:4000**. Gunakan satu jendela browser biasa untuk peserta dan satu jendela **penyamaran (incognito)** untuk staf, supaya tidak perlu keluar-masuk akun.
 
 Akun staf (password semua: `demo12345`):
 
@@ -20,7 +19,7 @@ Akun staf (password semua: `demo12345`):
 | Super Admin | `super@cih.demo` | Pengaturan, landing page, audit log, pengguna |
 | Admin Pendaftaran | `pendaftaran@cih.demo` | Program, angkatan, Pendaftar, Peserta, landing page |
 | Admin Keuangan | `keuangan@cih.demo` | Verifikasi pembayaran |
-| Akademik | `akademik@cih.demo` | Jadwal angkatan, validasi nilai, sertifikat, template |
+| Akademik | `akademik@cih.demo` | Jadwal angkatan, validasi nilai |
 | Instruktur Front Office | `instruktur@cih.demo` | Pertemuan, materi, absensi, nilai (angkatan Front Office dan Housekeeping) |
 | Instruktur Tata Boga | `instruktur2@cih.demo` | Angkatan Food & Beverage dan Tata Boga |
 
@@ -34,7 +33,7 @@ Jalur uji ini memakai angkatan **FO-2026-B3 (Front Office Hotel)**, karena jadwa
 
 ### 1. Pengaturan dan tampilan (Super Admin)
 1. Masuk sebagai `super@cih.demo` → **Pengaturan**.
-2. Isi **rekening bank** (bank, nomor, atas nama). Ini yang tampil di tagihan peserta. Isi juga alamat, telepon, WhatsApp, nama dan jabatan penanda tangan sertifikat. Simpan.
+2. Isi **rekening bank** (bank, nomor, atas nama). Ini yang tampil di tagihan peserta. Isi juga alamat, telepon, dan WhatsApp. Simpan.
 3. (Opsional) **Landing page**: ubah judul hero, **Pustaka media** untuk mengunggah gambar (teks alternatif wajib), **Pratinjau**, lalu **Terbitkan**. Buka `/` di jendela lain untuk melihat hasilnya. Coba **Kembalikan** versi lama di panel Riwayat.
 
 ### 2. Cek program, angkatan, dan jadwal
@@ -42,7 +41,6 @@ Jalur uji ini memakai angkatan **FO-2026-B3 (Front Office Hotel)**, karena jadwa
 2. Masuk sebagai `akademik@cih.demo`. Penyusunan jadwal dua tahap:
    - **Bank mata pelajaran**: pilih pelatihan **Front Office Hotel**. Terlihat 6 mata pelajaran (teori atau praktik, dengan jumlah jam). Coba **Mata pelajaran** untuk menambah satu, ubah, nonaktifkan (hilang dari pilihan jadwal tetapi tidak terhapus), dan **Hapus** (hanya bisa bila belum dipakai jadwal).
    - **Jadwal angkatan**: **1. Pilih pelatihan** (Front Office Hotel) → **2.** daftar angkatan pelatihan itu. FO-2026-B3 sudah berjadwal dan menampilkan mata pelajaran terpilih dengan jumlah pertemuan. Klik **Ubah jadwal** untuk melihat bentuk formulirnya: instruktur, hari, jam, lokasi, lalu centang mata pelajaran dari bank dan isi jumlah pertemuan tiap mapel. Pilih pelatihan lain (misalnya Housekeeping): angkatannya bertanda "belum ditetapkan", dan hanya mata pelajaran milik pelatihan itu yang muncul.
-3. (Opsional) Akademik → **Template sertifikat**: seret elemen ke posisi baru, **Pratinjau PDF**, lalu **Simpan dan aktifkan**.
 
 ---
 
@@ -57,7 +55,7 @@ Jalur uji ini memakai angkatan **FO-2026-B3 (Front Office Hotel)**, karena jadwa
 **Cek di sisi admin**: `pendaftaran@cih.demo` → **Pendaftar**. Peserta baru muncul dengan status "Menunggu pembayaran". Super Admin atau Admin Pendaftaran → **Pengumuman dan email** → antrean berisi email tagihan dan verifikasi.
 
 ### 4. Verifikasi email (boleh ditunda)
-Di Beranda peserta ada peringatan "Email belum diverifikasi". Karena mode dev tidak mengirim email sungguhan, klik **Simulasikan klik tautan (mode dev)**. Email harus terverifikasi sebelum sertifikat dikirim lewat email, tetapi pembayaran tidak menunggu ini.
+Di Beranda peserta ada peringatan "Email belum diverifikasi". Karena mode dev tidak mengirim email sungguhan, klik **Simulasikan klik tautan (mode dev)**. Pembayaran tidak menunggu verifikasi email ini.
 
 ---
 
@@ -101,17 +99,16 @@ Instruktur → **Absensi** → pilih pertemuan → tandai peserta hadir, izin, s
 
 ---
 
-## F. Nilai dan sertifikat
+## F. Nilai dan kelulusan
 
 ### 10. Penilaian
-1. Instruktur → **Nilai dan kelulusan**. Isi nilai **teori** dan **praktik** (tersimpan saat Anda keluar dari kolom). Nilai akhir dan rekomendasi dihitung sistem: bobot 40/60, lulus bila nilai akhir ≥ 70 dan kehadiran ≥ 80%.
-2. Klik **Kirim**. Setelah itu nilai terkunci untuk instruktur.
-3. `akademik@cih.demo` → **Nilai dan kelulusan**. Coba **Kembalikan** (kembali ke draf; instruktur mengisi dan mengirim lagi). Lalu **Validasi** sesuai rekomendasi. Untuk menguji penimpaan: **Timpa** menuntut alasan.
+1. Instruktur → **Input nilai akhir**. Setelah semua pertemuan mata pelajaran dibuat dan diabsen, isi nilai **tugas**, **teori**, dan **praktik** (tersimpan saat Anda keluar dari kolom). Absensi terisi otomatis; bobot ditetapkan Akademik. Tabel menampilkan nilai angka dan huruf.
+2. Klik **Setor ke Akademik** pada mata pelajaran itu. Setelah itu nilai mapel terkunci untuk instruktur.
+3. `akademik@cih.demo` → **Validasi nilai**. Coba **Kembalikan ke instruktur** (wajib catatan), lalu **Validasi**. Nilai yang divalidasi masuk transkrip; bila semua mapel seorang peserta valid, hasil lulus atau tidak lulus ditetapkan otomatis. **Batalkan validasi** menuntut alasan.
+4. Bila instruktur belum mengisi pertemuan, absensi, atau nilai: `super@cih.demo` → **Dashboard** → **Pantau instruktur** → **Masuk sebagai**. Banner kuning menandai sesi ini; **Kembali ke Super Admin** untuk keluar. Tercatat di audit log.
 
-### 11. Sertifikat
-1. Akademik → **Sertifikat** → **Terbitkan** (satu sertifikat). Nomor berformat `CERT/CIH/2026/0001`.
-2. **Lihat** → **Buka PDF sertifikat**: ada QR dan kode verifikasi 10 karakter.
-3. Peserta → **Sertifikat** → **Lihat** → unduh **sertifikat PDF** dan **transkrip PDF**. (Kelulusan sudah divalidasi, jadi transkrip tersedia dari Ruang belajar juga.)
+### 11. Transkrip
+Peserta → **Ruang belajar** → **Unduh transkrip**. Transkrip PDF tersedia setelah Akademik memvalidasi nilai.
 
 ---
 
@@ -119,13 +116,10 @@ Instruktur → **Absensi** → pilih pertemuan → tandai peserta hadir, izin, s
 
 ---
 
-## G. Pemeriksaan publik dan pencabutan
+## G. Pemeriksaan publik
 
-### 12. Cek keaslian
-Buka `/verifikasi`, masukkan kode verifikasi (dari PDF atau tabel Akademik), atau pindai QR. Hasilnya "Sertifikat sah" dengan nama, program, nomor, dan tanggal. Coba kode asal: "Kode tidak ditemukan".
-
-### 13. Mencabut
-Akademik → **Sertifikat** → **Cabut** (alasan wajib). Muat ulang `/verifikasi/KODE`: berubah menjadi "Sertifikat telah dicabut". Peserta tidak lagi bisa mengunduh PDF-nya.
+### 12. Cek status peserta
+Buka **Cek status peserta** di landing page (`/cek-status`), masukkan NIP peserta. Hasilnya nama, NIP, program, angkatan, dan status: *Aktif mengikuti pelatihan*, *Lulus*, *Tidak lulus*, *Selesai pelatihan*, *Mengundurkan diri*, *Dalam proses penerimaan*, atau *Tidak aktif*. Coba NIP asal: "NIP tidak ditemukan". Halaman ini tidak menampilkan NIK, kontak, alamat, nilai, atau pembayaran, dan dibatasi 30 pencarian per 10 menit per IP.
 
 ---
 
@@ -133,7 +127,7 @@ Akademik → **Sertifikat** → **Cabut** (alasan wajib). Muat ulang `/verifikas
 
 | Menu | Yang dilihat |
 |---|---|
-| **Audit log** | Semua aksi penting: daftar, bayar, verifikasi, data diri, nilai, sertifikat, perubahan landing page |
+| **Audit log** | Semua aksi penting: daftar, bayar, verifikasi, data diri, nilai, perubahan landing page |
 | **Pengumuman dan email** | Antrean email berstatus `queued` lalu `sent` (mode dev: tidak benar-benar dikirim). Coba kirim pengumuman ke satu angkatan |
 | **Pengguna** | Buat staf baru dengan password awal; saat staf itu masuk pertama kali, aplikasi memaksa ganti password |
 | Halaman Masuk → **Lupa password** | Alur atur ulang password. Hanya jalan untuk email yang sudah terverifikasi; tautannya ada di isi email (mode dev tidak menampilkannya di layar) |

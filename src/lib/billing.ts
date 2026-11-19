@@ -17,14 +17,19 @@ export function itemsFor(s: State, r: Registration): Item[] {
   const regFee = s.settings.regFee ?? 200000
   const pays = s.payments.filter((p) => p.registrationId === r.id)
   const items: Item[] = []
-  const detail = (p?: (typeof pays)[number]) => ({ paidOn: p?.transferDate, receipt: p?.receiptNo, proofFileId: p?.proofFileId, payer: p?.payerName })
+  const detail = (p?: (typeof pays)[number]) => ({ paidOn: p?.transferDate, receipt: p?.receiptNo, proofFileId: p?.proofFileId, payer: p?.payerName, note: p?.note })
+  const batch = s.batches.find((b) => b.id === r.batchId)
+  const imported = r.source === 'admin' // ditambahkan atau diimpor admin: biaya dicatat bagian keuangan
 
   const reg = pays.filter((p) => p.kind === 'pendaftaran')
   const ok = reg.find((p) => p.status === 'verified')
   const waiting = reg.find((p) => p.status === 'submitted')
   items.push(
     ok ? { key: 'reg', label: 'Biaya pendaftaran', amount: ok.amountPaid, state: 'paid', ...detail(ok) }
+      // Angkatan yang dibebaskan: biaya pendaftaran dianggap lunas (Rp0). Biaya registrasi tetap ditagih penuh.
+      : batch?.freeRegFee ? { key: 'reg', label: 'Biaya pendaftaran', amount: 0, state: 'paid', note: `Dibebaskan untuk angkatan ${batch.code}` }
       : waiting ? { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: 'confirm', ...detail(waiting) }
+      : imported ? { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: 'unpaid' }
       : rank(r.stage) > 1 ? { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: 'paid' } // data lama tanpa catatan pembayaran
       : { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: r.stage === 'data' ? 'later' : 'unpaid' },
   )
@@ -38,13 +43,14 @@ export function itemsFor(s: State, r: Registration): Item[] {
       const waitingPay = mine.find((p) => p.status === 'submitted')
       const rest = i.amount - i.paidAmount
       if (i.paidAmount >= i.amount) {
-        items.push({ key: i.id, label, amount: i.amount, due: i.dueDate, state: 'paid', ...detail(verified), note: verified ? undefined : 'Terpotong dari kelebihan pembayaran lain' })
+        items.push({ key: i.id, label, amount: i.amount, due: i.dueDate, state: 'paid', ...detail(verified), note: verified ? verified.note : 'Terpotong dari kelebihan pembayaran lain' })
       } else {
-        if (i.paidAmount > 0) items.push({ key: i.id + '-sebagian', label: `${label} (sebagian)`, amount: i.paidAmount, due: i.dueDate, state: 'paid', ...detail(verified), note: verified ? undefined : 'Terpotong dari kelebihan pembayaran lain' })
+        if (i.paidAmount > 0) items.push({ key: i.id + '-sebagian', label: `${label} (sebagian)`, amount: i.paidAmount, due: i.dueDate, state: 'paid', ...detail(verified), note: verified ? verified.note : 'Terpotong dari kelebihan pembayaran lain' })
         items.push({ key: i.id, label: i.paidAmount > 0 ? `Sisa ${label.toLowerCase()}` : label, amount: rest, due: i.dueDate, state: i.status === 'submitted' ? 'confirm' : 'unpaid', ...detail(waitingPay) })
       }
     }
-  } else if (r.stage === 'registrasi_ulang') items.push({ key: 'ru', label: 'Registrasi ulang dan cicilan', amount: null, state: 'nopackage' })
+  } else if (imported && r.stage === 'aktif') items.push({ key: 'ru', label: 'Biaya registrasi', amount: null, state: 'nopackage', note: 'Paket pembayaran belum ditetapkan bagian keuangan' })
+  else if (r.stage === 'registrasi_ulang') items.push({ key: 'ru', label: 'Registrasi ulang dan cicilan', amount: null, state: 'nopackage' })
   else if (r.stage !== 'aktif' && r.stage !== 'tidak_lulus') items.push({ key: 'ru', label: 'Registrasi ulang dan cicilan', amount: null, state: 'later' })
   return items
 }
@@ -65,4 +71,32 @@ export function shortfallOf(s: State, regId: string) {
   if (!first) return 0
   const got = s.payments.filter((p) => p.registrationId === regId && p.status === 'verified' && (p.kind === 'registrasi_ulang' || p.kind === 'cicilan')).reduce((t, p) => t + p.amountPaid, 0)
   return Math.max(0, Math.min(s.settings.minReenroll ?? 1_000_000, first.amount) - got)
+}
+
+/**
+ * Pesan WhatsApp dari bagian keuangan ke peserta didik, sesuai status tagihannya. Admin masih bisa mengubah isinya sebelum mengirim.
+ * Memuat rincian yang belum dibayar, jatuh tempo, dan rekening tujuan.
+ */
+export function billMessage(s: State, r: Registration, name: string): string {
+  const rp = (n: number) => 'Rp' + n.toLocaleString('id-ID')
+  const day = (d: string) => new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+  const items = itemsFor(s, r)
+  const { rest, status } = summarize(items)
+  const open = items.filter((i) => i.state === 'unpaid')
+  const short = r.stage === 'aktif' ? shortfallOf(s, r.id) : 0
+  const lines: string[] = [`Halo ${name.split(' ')[0]}, kami dari bagian Keuangan Cimahi Hotel Institute.`, '']
+  if (status === 'due') {
+    if (open.length) {
+      lines.push('Rincian tagihan Anda yang belum dibayar:')
+      for (const i of open) lines.push(`- ${i.label}: ${rp(i.amount ?? 0)}${i.due ? ` (jatuh tempo ${day(i.due)})` : ''}`)
+      lines.push(`Total belum dibayar: ${rp(rest)}.`)
+    }
+    if (items.some((i) => i.state === 'nopackage')) lines.push('Silakan pilih paket pembayaran registrasi ulang di aplikasi.')
+    if (short > 0) lines.push(`Pembayaran registrasi ulang Anda masih kurang ${rp(short)} dari minimal ${rp(s.settings.minReenroll ?? 1_000_000)}.`)
+    lines.push('', `Pembayaran melalui transfer ${s.settings.bankName ?? 'bank'} ${s.settings.bankAccount ?? ''} a.n. ${s.settings.bankHolder ?? ''}, lalu unggah bukti pembayaran di aplikasi.`.replace(/\s+/g, ' ').trim())
+  } else if (status === 'confirm') lines.push('Bukti pembayaran Anda sudah kami terima dan sedang diverifikasi. Kami akan memberi kabar setelah dikonfirmasi.')
+  else if (status === 'paid') lines.push('Seluruh tagihan Anda saat ini sudah lunas. Terima kasih atas pembayarannya.')
+  else lines.push('Tagihan Anda akan tersedia sesuai tahapan pendaftaran. Kami akan menginformasikannya kembali.')
+  lines.push('', 'Salam,', 'Keuangan Cimahi Hotel Institute')
+  return lines.join('\n')
 }

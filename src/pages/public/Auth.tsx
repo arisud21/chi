@@ -1,50 +1,56 @@
-import { IconAlertTriangle, IconCircleCheck, IconCircleX, IconSearch } from '@tabler/icons-react'
+import { IconCircleX, IconSearch, IconUserCheck } from '@tabler/icons-react'
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
-import { Badge, Field, PasswordInput, dateID, rupiah, useAct, useToast } from '../../components/ui'
-import { forgotPassword, login, register, resetPassword, useStore, verifyCertificate } from '../../lib/store'
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
+import { Field, PasswordInput, dateID, rupiah, useAct, useToast } from '../../components/ui'
+import { checkParticipantStatus, forgotPassword, login, register, resetPassword, useStore } from '../../lib/store'
 
-interface Found { found: boolean; holder?: string; program?: string; number?: string; status?: 'issued' | 'revoked'; issuedAt?: string }
+type StatusKey = 'aktif' | 'menunggu_pelunasan' | 'lulus' | 'tidak_lulus' | 'selesai' | 'mundur' | 'proses' | 'tidak_aktif'
+interface Found { found: boolean; nip?: string; name?: string; program?: string; batch?: string | null; startDate?: string | null; endDate?: string | null; status?: StatusKey; statusLabel?: string }
+const STATUS_CLS: Record<StatusKey, string> = {
+  aktif: 'bg-sky-50 text-sky-800 ring-sky-200', menunggu_pelunasan: 'bg-amber-50 text-amber-800 ring-amber-200', lulus: 'bg-emerald-50 text-emerald-800 ring-emerald-200', selesai: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  tidak_lulus: 'bg-zinc-100 text-zinc-700 ring-zinc-200', mundur: 'bg-zinc-100 text-zinc-700 ring-zinc-200', tidak_aktif: 'bg-zinc-100 text-zinc-700 ring-zinc-200',
+  proses: 'bg-amber-50 text-amber-800 ring-amber-200',
+}
 
-export function Verify() {
-  const { code } = useParams()
+/** Cek status peserta publik berdasarkan NIP (Nomor Induk Peserta). NIP dibawa di ?nip= agar NIP berisi garis miring tetap aman. */
+export function CekStatus() {
+  const [params] = useSearchParams()
+  const nip = params.get('nip')?.trim() ?? ''
   const nav = useNavigate()
-  const [q, setQ] = useState(code ?? '')
-  const [res, setRes] = useState<Found | 'loading' | 'error' | null>(null)
+  const [q, setQ] = useState(nip)
+  const [res, setRes] = useState<Found | 'loading' | { error: string } | null>(null)
   useEffect(() => {
-    if (!code) { setRes(null); return }
+    setQ(nip)
+    if (!nip) { setRes(null); return }
     setRes('loading')
-    verifyCertificate(code).then((r) => setRes(r.ok ? (r.data as Found) : 'error'))
-  }, [code])
-  const submit = (e: FormEvent) => { e.preventDefault(); if (q.trim()) nav(`/verifikasi/${q.trim().toUpperCase()}`) }
+    checkParticipantStatus(nip).then((r) => setRes(r.ok ? (r.data as Found) : { error: r.error }))
+  }, [nip])
+  const submit = (e: FormEvent) => { e.preventDefault(); if (q.trim()) nav(`/cek-status?nip=${encodeURIComponent(q.trim())}`) }
   return (
     <div className="mx-auto max-w-xl px-4 py-14 sm:px-6">
-      <h1 className="font-display text-3xl font-bold">Cek keaslian sertifikat</h1>
-      <p className="mt-2 text-sm text-muted">Masukkan kode verifikasi yang tercetak di sertifikat atau dari QR code.</p>
+      <h1 className="font-display text-3xl font-bold">Cek status peserta</h1>
+      <p className="mt-2 text-sm text-muted">Masukkan NIP (Nomor Induk Peserta) untuk melihat status keikutsertaan peserta pelatihan.</p>
       <form onSubmit={submit} className="mt-6 flex gap-2">
-        <input className="input font-mono uppercase tracking-wider" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Contoh: K7M2QX9TPA" aria-label="Kode verifikasi" maxLength={10} />
+        <input className="input font-mono tracking-wider" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Contoh: 261100001" aria-label="NIP" inputMode="text" maxLength={12} />
         <button className="btn-primary"><IconSearch size={18} />Cek</button>
       </form>
-      {code && res === 'loading' && <p className="mt-6 text-sm text-muted">Memeriksa…</p>}
-      {code && res === 'error' && <p className="mt-6 text-sm text-red-700">Gagal memeriksa. Coba lagi sebentar lagi.</p>}
-      {code && res && typeof res === 'object' && (
+      {nip && res === 'loading' && <p className="mt-6 text-sm text-muted" role="status">Memeriksa…</p>}
+      {nip && res && typeof res === 'object' && 'error' in res && <p className="mt-6 text-sm text-red-700" role="alert">{res.error}</p>}
+      {nip && res && typeof res === 'object' && 'found' in res && (
         <div className="mt-6 animate-pop">
           {res.found ? (
-            <div className={`card p-6 ${res.status === 'revoked' ? 'border-red-300' : 'border-emerald-300'}`}>
-              <div className="flex items-center gap-2 font-bold">
-                {res.status === 'issued' ? <IconCircleCheck className="text-emerald-600" /> : <IconAlertTriangle className="text-red-600" />}
-                {res.status === 'issued' ? 'Sertifikat sah' : 'Sertifikat telah dicabut'}
-              </div>
+            <div className="card p-6">
+              <div className="flex items-center gap-2 font-bold"><IconUserCheck className="text-brand-600" />Peserta terdaftar</div>
               <dl className="mt-4 space-y-3 text-sm">
-                <div><dt className="text-muted">Nama</dt><dd className="font-semibold">{res.holder}</dd></div>
+                <div><dt className="text-muted">Nama</dt><dd className="font-semibold">{res.name}</dd></div>
+                <div><dt className="text-muted">NIP</dt><dd className="font-mono font-semibold">{res.nip}</dd></div>
                 <div><dt className="text-muted">Program</dt><dd className="font-semibold">{res.program}</dd></div>
-                <div><dt className="text-muted">Nomor</dt><dd className="font-mono font-semibold">{res.number}</dd></div>
-                <div><dt className="text-muted">Tanggal terbit</dt><dd className="font-semibold">{dateID(res.issuedAt!)}</dd></div>
-                <div><dt className="text-muted">Status</dt><dd><Badge status={res.status!} /></dd></div>
+                {res.batch && <div><dt className="text-muted">Angkatan</dt><dd className="font-semibold">{res.batch}{res.startDate && res.endDate ? ` (${dateID(res.startDate)} sampai ${dateID(res.endDate)})` : ''}</dd></div>}
+                <div><dt className="text-muted">Status</dt><dd><span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${STATUS_CLS[res.status!]}`}>{res.statusLabel}</span></dd></div>
               </dl>
             </div>
           ) : (
-            <div className="card flex items-center gap-3 border-red-300 p-6"><IconCircleX className="shrink-0 text-red-600" /><p className="text-sm"><b>Kode tidak ditemukan.</b> Periksa kembali penulisan kode, atau hubungi lembaga bila Anda yakin kode benar.</p></div>
+            <div className="card flex items-center gap-3 border-red-300 p-6"><IconCircleX className="shrink-0 text-red-600" /><p className="text-sm"><b>NIP tidak ditemukan.</b> Periksa kembali penulisan NIP, atau hubungi lembaga bila Anda yakin NIP benar.</p></div>
           )}
         </div>
       )}
@@ -52,9 +58,11 @@ export function Verify() {
   )
 }
 
+/** Tombol masuk cepat hanya tampil saat pengembangan, atau di build yang dibuat dengan VITE_SHOW_DEMO=1. */
+const SHOW_DEMO = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO === '1'
 const DEMO = [
-  ['Super Admin', 'super@cih.demo'], ['Admin Pendaftaran', 'pendaftaran@cih.demo'], ['Admin Keuangan', 'keuangan@cih.demo'], ['Staf Akademik', 'akademik@cih.demo'],
-  ['Instruktur Front Office', 'instruktur@cih.demo'], 
+  ['Super Admin', 'superadmin@chi.demo'], ['Admin Pendaftaran', 'admindaf@chi.demo'], ['Admin Keuangan', 'adminkeu@chi.demo'], ['Admin Akademik', 'adminaka@chi.demo'],
+  ['Instruktur RD2', 'rd2@gmail.com'],
 ]
 
 export function Login() {
@@ -81,7 +89,7 @@ export function Login() {
         <button className="btn-primary w-full" disabled={busy}>{busy ? 'Memeriksa…' : 'Masuk'}</button>
         <div className="flex justify-between text-sm text-muted"><span>Belum punya akun? <Link to="/daftar" className="font-semibold text-brand-600">Daftar</Link></span><Link to="/lupa-password" className="font-semibold text-brand-600">Lupa password</Link></div>
       </form>
-      <div>
+      {SHOW_DEMO && <div>
         <h2 className="font-bold">Akun staf demo (hanya data pengembangan)</h2>
         <p className="mt-1 text-sm text-muted">Semua akun demo memakai password <code className="rounded bg-white px-1 font-mono">demo12345</code>. Klik untuk masuk. Peserta mendaftar sendiri lewat halaman Daftar.</p>
         <div className="mt-3 grid gap-2">
@@ -91,7 +99,7 @@ export function Login() {
             </button>
           ))}
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -144,7 +152,7 @@ export function Register() {
   return (
     <div className="mx-auto max-w-lg px-4 py-14 sm:px-6">
       <form onSubmit={submit} className="card space-y-4 p-6">
-        <div><h1 className="font-display text-2xl font-bold">Registrasi pelatihan</h1><p className="mt-1 text-sm text-muted">Pilih pelatihan dan buat akun. Berikutnya: isi data diri, bayar biaya pendaftaran, ujian tulis, lalu pengumuman hasil seleksi.</p></div>
+        <div><h1 className="font-display text-2xl font-bold">Registrasi pelatihan</h1><p className="mt-1 text-sm text-muted">Pilih pelatihan dan buat akun. Berikutnya: isi data diri, bayar biaya pendaftaran, ujian online, lalu pengumuman hasil seleksi.</p></div>
 
         <fieldset className="space-y-3 rounded-xl bg-brand-50 p-4">
           <legend className="px-1 text-sm font-bold">1. Pilih pelatihan</legend>
@@ -168,7 +176,7 @@ export function Register() {
         <Field label="NIK" hint={nikBad ? 'NIK harus 16 digit angka.' : '16 digit sesuai KTP. Satu NIK hanya untuk satu akun.'}><input className={`input font-mono ${nikBad ? '!border-red-500' : ''}`} required inputMode="numeric" maxLength={16} value={f.nik} onChange={(e) => setF({ ...f, nik: e.target.value.replace(/\D/g, '') })} autoComplete="off" /></Field>
         <Field label="Tanggal lahir" hint={`Usia maksimal ${MAX_AGE} tahun.`}><input className="input" type="date" required min={bdMin} max={bdMax} value={f.birthDate} onChange={set('birthDate')} autoComplete="bday" /></Field>
         <Field label="Password" hint="Minimal 8 karakter."><PasswordInput required minLength={8} value={f.password} onChange={set('password')} autoComplete="new-password" /></Field>
-        <input type="text" name="website" value={f.website} onChange={set('website')} tabIndex={-1} autoComplete="off" aria-hidden className="absolute -left-[9999px] h-0 w-0 opacity-0" />
+        <input type="text" name="cih_hp_field" value={f.website} onChange={set('website')} tabIndex={-1} autoComplete="off" aria-hidden className="absolute -left-[9999px] h-0 w-0 opacity-0" />
         <label className="flex items-start gap-3 text-sm"><input type="checkbox" required checked={f.consent} onChange={set('consent')} className="mt-1 size-4 accent-brand-600" />Saya setuju data saya diproses untuk keperluan pelatihan sesuai kebijakan privasi (UU PDP).</label>
         <button className="btn-primary w-full" disabled={busy || !programId}>{busy ? 'Membuat akun…' : 'Registrasi'}</button>
         <p className="text-sm text-muted">Sudah punya akun? <Link to="/masuk" className="font-semibold text-brand-600">Masuk</Link></p>

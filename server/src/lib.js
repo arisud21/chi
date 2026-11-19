@@ -39,18 +39,25 @@ export async function q(sql, params = []) {
 /** Jalankan fungsi di dalam satu transaksi. Semua efek verifikasi bayar, status, audit, dan email atomik (PRD T24). */
 export async function tx(fn) {
   const conn = await pool.getConnection()
+  const after = []
+  let out
   try {
     await conn.beginTransaction()
-    const out = await fn(conn)
+    conn.__after = after
+    out = await fn(conn)
     await conn.commit()
-    return out
   } catch (e) {
     await conn.rollback()
     throw e
   } finally {
+    conn.__after = null
     conn.release()
   }
+  for (const f of after) { try { f() } catch (e) { console.error(e) } } // setelah commit, supaya klien yang diberi tahu langsung melihat datanya
+  return out
 }
+/** Jalankan fn setelah transaksi berhasil commit. Di luar transaksi, dijalankan sebentar lagi. */
+export const onCommit = (conn, fn) => { if (conn?.__after) conn.__after.push(fn); else setTimeout(fn, 250) }
 export const cq = async (conn, sql, params = []) => (await conn.query(sql, params))[0]
 
 export const audit = (conn, userId, action, entity, detail = '') =>
@@ -92,3 +99,7 @@ export async function saveUpload(file, { kind, ownerId, allowed, alt }) {
 }
 
 export const randomCode = (n) => Array.from(crypto.randomBytes(n), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
+
+/** Alasan baku pendaftar yang dinyatakan mundur otomatis oleh sistem (status expired). Hanya yang beralasan ini yang boleh melanjutkan sendiri. */
+export const AUTO_WITHDRAW_DAYS = 14
+export const AUTO_WITHDRAW_REASON = 'Mengundurkan diri otomatis: tidak melanjutkan proses pendaftaran atau registrasi selama 2 minggu'

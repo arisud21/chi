@@ -6,7 +6,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   admin_keuangan: 'Admin Keuangan',
   akademik: 'Akademik',
   instruktur: 'Instruktur',
-  peserta: 'Peserta',
+  peserta: 'Peserta didik',
 }
 
 export interface User {
@@ -19,7 +19,9 @@ export interface User {
   role: Role
   active: boolean
   mustChange?: boolean
+  emailChangeable?: boolean // peserta buatan admin: boleh ganti email satu kali saat masuk pertama
   profileDone?: boolean
+  instructorPrograms?: string[] // khusus instruktur: id program yang diampu dan/atau 'gabungan'
 }
 
 export interface Profile {
@@ -42,6 +44,10 @@ export interface Profile {
   occupation: string
   completed: boolean
   school?: string
+  internshipPref?: '' | 'dalam_negeri' | 'luar_negeri'
+  groomingAgreed?: boolean
+  infoSource?: string
+  infoSourceOther?: string
 }
 
 export interface Program {
@@ -55,7 +61,7 @@ export interface Program {
   price: number
   active: boolean
   archived: boolean
-  rules: { theoryWeight: number; practicalWeight: number; passingScore: number; minAttendance: number }
+  rules: { passingScore: number; minAttendance: number }
   nipCode?: number | null // digit program di NIP, misalnya 1 untuk FB dan 2 untuk RD
 }
 
@@ -69,12 +75,12 @@ export interface Batch {
   endDate: string
   quota: number
   status: BatchStatus
-  instructorId: string
   location: string
   scheduleDays: string
   startTime: string
   endTime: string
   plannedSessions: number
+  freeRegFee?: boolean // angkatan dibebaskan dari biaya pendaftaran (biaya registrasi tetap ditagih)
 }
 
 export type Stage = 'data' | 'bayar_daftar' | 'ujian' | 'menunggu_hasil' | 'registrasi_ulang' | 'aktif' | 'tidak_lulus'
@@ -96,6 +102,12 @@ export interface Registration {
   dueAt: string
   createdAt: string
   cancelledReason?: string
+  followUpAt?: string // kapan pendaftar mundur ditandai sudah di-follow up lewat WhatsApp; kosong = belum
+  followUpBy?: string
+  paidOff?: boolean // seluruh pembayaran sudah lunas (syarat kelulusan sempurna dan penempatan magang)
+  canResume?: boolean // calon peserta didik yang mundur dan boleh melanjutkan proses (tombol Lanjutkan proses)
+  autoWithdrawn?: boolean // dinyatakan mundur otomatis oleh sistem (2 minggu tanpa proses); pendaftar boleh melanjutkan sendiri
+  source?: string // 'admin' = ditambahkan atau diimpor admin
 }
 
 export type PaymentStatus = 'submitted' | 'verified' | 'rejected'
@@ -114,6 +126,7 @@ export interface Payment {
   rejectReason?: string
   receiptNo?: string
   verifiedBy?: string
+  note?: string // ada = dicatat langsung oleh keuangan
   createdAt: string
 }
 
@@ -130,7 +143,13 @@ export interface Subject {
   active: boolean
 }
 
-export interface BatchSubject { batchId: string; subjectId: string; sessions: number }
+/** Jadwal satu mata pelajaran di satu angkatan: pengampu, hari (dipisah koma), jam, dan ruang kelasnya. */
+export interface BatchSubject {
+  batchId: string; subjectId: string; sessions: number
+  instructorId: string; days: string; startTime: string; endTime: string; room: string
+  groupId: string // kelas gabungan: sama untuk semua angkatan yang ikut kelas yang sama; kosong = jadwal sendiri
+  weights?: { absensi: number; tugas: number; teori: number; praktik: number } | null // bobot nilai mapel ini (persen, jumlah 100); null = bobot default Akademik
+}
 
 export interface ClassSession {
   id: string
@@ -148,19 +167,21 @@ export interface Grade {
   theory: number
   practical: number
   attendancePct: number
+  finalScore?: number | null // rata-rata nilai akhir semua mata pelajaran; kosong = rumus bobot teori/praktik program (data lama)
   status: GradeStatus
   passed?: boolean
   overrideReason?: string
 }
 
-export interface Certificate {
-  id: string
+/** Nilai tugas, teori (UTS), dan praktik (UAS) satu peserta di satu mata pelajaran, skala 0-100, diisi manual. null = belum diisi. */
+export interface SubjectGrade {
   registrationId: string
-  number: string
-  verificationCode: string
-  status: 'issued' | 'revoked'
-  issuedAt: string
-  revokedReason?: string
+  subjectId: string
+  task: number | null
+  theory: number | null
+  practical: number | null
+  status?: 'draft' | 'submitted' | 'validated' // draft = instruktur mengisi, submitted = disetor ke Akademik, validated = masuk transkrip
+  validatedAt?: string | null
 }
 
 export interface Material {
@@ -176,6 +197,7 @@ export interface Material {
 export interface Assignment {
   id: string
   batchId: string
+  subjectId?: string // kosong = tugas umum angkatan (data lama)
   title: string
   description: string
   dueAt: string
@@ -190,23 +212,6 @@ export interface Submission {
   score?: number
   feedback?: string
   submittedAt: string
-}
-
-export interface FieldCfg { x: number; y: number; size: number; color: string; align: 'left' | 'center' | 'right' }
-export interface TemplateConfig {
-  fields: Record<string, FieldCfg>
-  qr: { x: number; y: number; size: number }
-  signature: { x: number; y: number; size: number }
-}
-export interface CertTemplate {
-  id: string
-  version: number
-  config: TemplateConfig
-  isActive: boolean
-  hasBackground: boolean
-  hasSignature: boolean
-  backgroundFileId?: string
-  signatureFileId?: string
 }
 
 export interface MediaAsset { id: string; name: string; alt: string; at: string }
@@ -230,7 +235,24 @@ export interface EmailItem {
 
 export type SectionType =
   | 'announcement_bar' | 'hero' | 'about' | 'programs' | 'upcoming_batches'
-  | 'benefits' | 'testimonials' | 'stats' | 'faq' | 'cta' | 'contact'
+  | 'benefits' | 'testimonials' | 'stats' | 'faq' | 'cta' | 'contact' | 'marquee' | 'gallery' | 'organization' | 'location' | 'social'
+
+/** CHI Today: kabar kegiatan untuk publik. featured = tampil di bagian Kegiatan pada landing page. */
+export interface ChiTodayItem {
+  id: string
+  slug: string
+  title: string
+  summary: string
+  body: string
+  tag: string
+  eventDate: string
+  imageId: string
+  imageSrc: string
+  published: boolean
+  featured: boolean
+  sort: number
+  createdAt: string
+}
 
 export interface Section {
   id: string
@@ -278,6 +300,8 @@ export interface SiteSettings {
   email?: string
   website?: string
   hotline?: string
+  campusNote?: string
+  signatureFileId?: string
 }
 
 export type DocKind = 'ktp' | 'ijazah' | 'foto' | 'kk' | 'buta_warna'
@@ -294,3 +318,10 @@ export interface QuestionBank { id: string; name: string; count: number }
 export interface Question { id: string; bankId: string; body: string; options: string[]; correctIdx: number }
 export interface ExamAttempt { id: string; examId: string; registrationId: string; startedAt: string; finishedAt: string; score: number | null }
 export interface Notification { id: string; title: string; body: string; link: string; read: boolean; createdAt: string }
+
+export interface Company { id: string; name: string; category: string; address: string; city: string; country: string; contactName: string; contactPhone: string; contactEmail: string; notes: string; active: boolean }
+export interface Placement { id: string; registrationId: string; companyId: string; kind: 'magang' | 'kerja'; position: string; startDate: string; endDate: string; score: number | null; status: 'berjalan' | 'selesai' | 'batal'; notes: string }
+export interface CashTx { id: string; direction: 'masuk' | 'keluar'; category: string; date: string; amount: number; description: string; createdAt: string }
+export interface LogbookEntry { id: string; placementId: string; date: string; activity: string; learning: string; hours: number; status: 'diajukan' | 'disetujui' | 'revisi'; reviewerNote: string; reviewedAt: string }
+
+export interface NewsItem { id: string; title: string; body: string; audience: string[]; startsOn: string; endsOn: string; active: boolean; createdAt: string; read: boolean; eligible: boolean; readCount: number }

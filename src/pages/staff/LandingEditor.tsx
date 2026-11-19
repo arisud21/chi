@@ -10,19 +10,40 @@ interface TypeDef { fields: FieldDef[]; list?: { key: string; label: string; ite
 
 const DEFS: Partial<Record<SectionType, TypeDef>> = {
   announcement_bar: { fields: [{ key: 'text', label: 'Teks' }, { key: 'href', label: 'Tautan (opsional)', kind: 'href' }], blank: { text: 'Pendaftaran angkatan baru dibuka.', href: '' } },
-  hero: { fields: [{ key: 'title', label: 'Judul' }, { key: 'subtitle', label: 'Subjudul', kind: 'area' }, { key: 'imageId', label: 'Gambar latar (opsional)', kind: 'media' }, { key: 'ctaLabel', label: 'Label tombol utama' }, { key: 'ctaHref', label: 'Tujuan tombol utama', kind: 'href' }, { key: 'secondaryLabel', label: 'Label tombol kedua' }, { key: 'secondaryHref', label: 'Tujuan tombol kedua', kind: 'href' }], blank: { title: 'Judul baru', subtitle: '', ctaLabel: 'Daftar', ctaHref: '/daftar' } },
+  hero: { fields: [{ key: 'title', label: 'Judul' }, { key: 'highlight', label: 'Judul baris kedua (warna gradasi)' }, { key: 'subtitle', label: 'Subjudul', kind: 'area' }, { key: 'imageId', label: 'Foto utama (opsional, mengganti foto bawaan)', kind: 'media' }, { key: 'ctaLabel', label: 'Label tombol utama' }, { key: 'ctaHref', label: 'Tujuan tombol utama', kind: 'href' }, { key: 'secondaryLabel', label: 'Label tombol kedua' }, { key: 'secondaryHref', label: 'Tujuan tombol kedua', kind: 'href' }], blank: { title: 'Judul baru', subtitle: '', ctaLabel: 'Daftar', ctaHref: '/daftar' } },
   stats: { fields: [{ key: 'note', label: 'Catatan kecil' }], blank: { note: '' } },
   programs: { fields: [{ key: 'title', label: 'Judul' }, { key: 'limit', label: 'Jumlah ditampilkan', kind: 'number' }], blank: { title: 'Program pelatihan', limit: 4 } },
   upcoming_batches: { fields: [{ key: 'title', label: 'Judul' }, { key: 'limit', label: 'Jumlah ditampilkan', kind: 'number' }], blank: { title: 'Angkatan dibuka', limit: 4 } },
   benefits: { fields: [{ key: 'title', label: 'Judul' }], list: { key: 'items', label: 'Poin', item: [{ key: 'title', label: 'Judul poin' }, { key: 'body', label: 'Isi', kind: 'area' }] }, blank: { title: 'Keunggulan', items: [{ title: '', body: '' }] } },
   faq: { fields: [{ key: 'title', label: 'Judul' }], list: { key: 'items', label: 'Pertanyaan', item: [{ key: 'q', label: 'Pertanyaan' }, { key: 'a', label: 'Jawaban', kind: 'area' }] }, blank: { title: 'FAQ', items: [{ q: '', a: '' }] } },
   cta: { fields: [{ key: 'title', label: 'Judul' }, { key: 'body', label: 'Isi', kind: 'area' }, { key: 'label', label: 'Label tombol' }, { key: 'href', label: 'Tujuan', kind: 'href' }], blank: { title: 'Ajakan', body: '', label: 'Daftar', href: '/daftar' } },
-  about: { fields: [{ key: 'imageId', label: 'Gambar (opsional)', kind: 'media' }, { key: 'title', label: 'Judul' }, { key: 'body', label: 'Isi', kind: 'area' }], blank: { title: 'Tentang kami', body: '' } },
+  about: {
+    fields: [{ key: 'tagline', label: 'Tagline kecil di atas judul' }, { key: 'title', label: 'Judul' }, { key: 'body', label: 'Isi', kind: 'area' }, { key: 'imageId', label: 'Foto (opsional, mengganti foto bawaan)', kind: 'media' }],
+    list: { key: 'items', label: 'Poin unggulan', item: [{ key: 'text', label: 'Poin' }] },
+    blank: { title: 'Profil', body: '', items: [] },
+  },
+  organization: {
+    fields: [{ key: 'title', label: 'Judul' }, { key: 'subtitle', label: 'Subjudul', kind: 'area' }],
+    list: { key: 'items', label: 'Jabatan (urutan pertama tampil paling atas; jabatan tanpa nama tidak ditampilkan)', item: [{ key: 'position', label: 'Jabatan' }, { key: 'name', label: 'Nama' }, { key: 'imageId', label: 'Foto (opsional)', kind: 'media' }] },
+    blank: { title: 'Struktur organisasi', subtitle: '', items: [{ position: '', name: '', imageId: '' }] },
+  },
+  location: { fields: [{ key: 'title', label: 'Judul' }, { key: 'subtitle', label: 'Subjudul', kind: 'area' }, { key: 'mapQuery', label: 'Pencarian peta (kosongkan untuk memakai alamat di Pengaturan)' }], blank: { title: 'Lokasi', subtitle: '', mapQuery: '' } },
+  social: {
+    fields: [{ key: 'title', label: 'Judul' }, { key: 'subtitle', label: 'Subjudul', kind: 'area' }],
+    list: { key: 'items', label: 'Akun', item: [{ key: 'platform', label: 'Platform: instagram, tiktok, youtube, facebook, whatsapp, website, atau email' }, { key: 'handle', label: 'Nama akun yang ditampilkan' }, { key: 'url', label: 'Tautan (https:// atau mailto:)', kind: 'href' }] },
+    blank: { title: 'Media sosial', subtitle: '', items: [{ platform: 'instagram', handle: '', url: '' }] },
+  },
   testimonials: { fields: [{ key: 'title', label: 'Judul' }], list: { key: 'items', label: 'Testimoni', item: [{ key: 'name', label: 'Nama' }, { key: 'role', label: 'Jabatan atau angkatan' }, { key: 'quote', label: 'Kutipan', kind: 'area' }] }, blank: { title: 'Kata alumni', items: [{ name: '', role: '', quote: '' }] } },
   contact: { fields: [{ key: 'title', label: 'Judul' }], blank: { title: 'Hubungi kami' } },
+  marquee: { fields: [], list: { key: 'items', label: 'Kata kunci', item: [{ key: 'text', label: 'Teks' }] }, blank: { items: [{ text: 'Room Division' }, { text: 'Food & Beverage' }] } },
+  gallery: {
+    fields: [{ key: 'title', label: 'Judul' }, { key: 'subtitle', label: 'Subjudul', kind: 'area' }, { key: 'limit', label: 'Jumlah kegiatan CHI Today yang ditampilkan (pilih kegiatannya di menu CHI Today)', kind: 'number' }],
+    list: { key: 'items', label: 'Foto cadangan (dipakai hanya bila belum ada kegiatan CHI Today yang ditandai Tampil di beranda)', item: [{ key: 'imageId', label: 'Foto (kosongkan untuk memakai foto bawaan)', kind: 'media' }, { key: 'caption', label: 'Keterangan' }, { key: 'tag', label: 'Label, mis. Room Division' }] },
+    blank: { title: 'Kegiatan peserta', subtitle: '', items: [{ imageId: '', caption: '', tag: '' }] },
+  },
 }
 const ADDABLE = Object.keys(DEFS) as SectionType[]
-const validHref = (h: string) => !h || h.startsWith('/') || h.startsWith('#') || /^https:\/\//.test(h)
+const validHref = (h: string) => !h || h.startsWith('/') || h.startsWith('#') || /^https:\/\//.test(h) || /^mailto:[^\s]+@[^\s]+$/.test(h)
 
 function FieldInput({ f, value, onChange, onPatch }: { f: FieldDef; value: any; onChange: (v: any) => void; onPatch?: (p: Record<string, any>) => void }) {
   const media = useStore((s) => s.media)
@@ -71,7 +92,12 @@ export function LandingEditor() {
   const patch = (id: string, fn: (s: Section) => Section) => setDraft(draft.map((s) => (s.id === id ? fn(s) : s)))
   const sec = draft.find((s) => s.id === editing)
   const def = sec && DEFS[sec.type]
-  const hasBadLink = draft.some((s) => (DEFS[s.type]?.fields ?? []).some((f) => f.kind === 'href' && !validHref(s.content[f.key] ?? '')))
+  const hasBadLink = draft.some((s) => {
+    const d = DEFS[s.type]
+    if ((d?.fields ?? []).some((f) => f.kind === 'href' && !validHref(s.content[f.key] ?? ''))) return true
+    const list = d?.list
+    return !!list && (s.content[list.key] ?? []).some((it: any) => list.item.some((f) => f.kind === 'href' && !validHref(it[f.key] ?? '')))
+  })
 
   const drop = (targetId: string) => {
     if (!dragId || dragId === targetId) return
@@ -131,7 +157,11 @@ export function LandingEditor() {
                 <p className="mb-2 text-sm font-bold">{def.list.label}</p>
                 {(sec.content[def.list.key] as any[]).map((it, idx) => (
                   <div key={idx} className="mb-3 space-y-2 rounded-xl bg-canvas p-3">
-                    {def.list!.item.map((f) => <FieldInput key={f.key} f={f} value={it[f.key]} onChange={(v) => patch(sec.id, (x) => { const items = [...x.content[def.list!.key]]; items[idx] = { ...items[idx], [f.key]: v }; return { ...x, content: { ...x.content, [def.list!.key]: items } } })} />)}
+                    {it.src && !it.imageId && <img src={it.src} alt="" className="h-20 rounded-lg bg-zinc-100 object-contain" />}
+                    {def.list!.item.map((f) => {
+                      const set = (pt: Record<string, any>) => patch(sec.id, (x) => { const items = [...x.content[def.list!.key]]; items[idx] = { ...items[idx], ...pt }; return { ...x, content: { ...x.content, [def.list!.key]: items } } })
+                      return <FieldInput key={f.key} f={f} value={it[f.key]} onChange={(v) => set({ [f.key]: v })} onPatch={set} />
+                    })}
                     <button className="btn-ghost !min-h-9 text-red-700" onClick={() => patch(sec.id, (x) => ({ ...x, content: { ...x.content, [def.list!.key]: x.content[def.list!.key].filter((_: any, k: number) => k !== idx) } }))}>Hapus item</button>
                   </div>
                 ))}
@@ -166,7 +196,7 @@ export function LandingEditor() {
           {media.length === 0 && <p className="col-span-3 text-sm text-muted">Belum ada gambar.</p>}
           {media.map((m) => (
             <figure key={m.id} className="text-xs">
-              <img src={`/api/media/${m.id}?w=sm`} alt={m.alt} className="aspect-square w-full rounded-lg object-cover" loading="lazy" />
+              <img src={`/api/media/${m.id}?w=sm`} alt={m.alt} className="aspect-square w-full rounded-lg bg-zinc-100 object-contain" loading="lazy" />
               <figcaption className="mt-1 line-clamp-2 text-muted">{m.alt}</figcaption>
               {me?.role === 'super_admin' && <button className="mt-1 font-semibold text-red-700 underline" onClick={() => act(deleteMedia(m.id), 'Gambar dihapus.')}>Hapus</button>}
             </figure>

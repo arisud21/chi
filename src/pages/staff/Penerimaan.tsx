@@ -1,14 +1,14 @@
 import { IconCopy, IconDownload, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Empty, Field, Modal, PageHeader, Table, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
+import { ask, Empty, Field, Modal, MoneyInput, PageHeader, Table, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
 import {
-  createExamToken, decideAdmission, deleteBank, deleteExam, deleteFeeItem, deletePlan, deleteQuestion, saveBank, saveExamConfig, saveFeeItem, saveFees, saveLetterSettings, savePlan, revokeExamToken, saveQuestions, setProgramPrice, useStore,
+  createExamToken, decideAdmission, deleteBank, deleteExam, deleteFeeItem, deletePlan, deleteQuestion, saveBank, saveExamConfig, saveFeeItem, saveFees, savePlan, revokeExamToken, saveQuestions, setProgramPrice, useStore,
 } from '../../lib/store'
 import type { Exam, PaymentPlan, Question } from '../../lib/types'
 import { planPreview } from '../peserta/Tahapan'
 
-type Tab = 'ujian' | 'soal' | 'hasil' | 'surat'
-const TABS: [Tab, string][] = [['ujian', 'Jadwal dan token'], ['soal', 'Bank soal'], ['hasil', 'Hasil dan keputusan'], ['surat', 'Surat kelulusan']]
+type Tab = 'ujian' | 'soal' | 'hasil'
+const TABS: [Tab, string][] = [['ujian', 'Jadwal dan token'], ['soal', 'Bank soal'], ['hasil', 'Hasil dan keputusan']]
 
 const toLocal = (iso: string) => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16) }
 const nowLocal = (plusDays = 0) => toLocal(new Date(Date.now() + plusDays * 86_400_000).toISOString())
@@ -17,7 +17,7 @@ export function UjianAdmin() {
   const [tab, setTab] = useState<Tab>('ujian')
   return (
     <>
-      <PageHeader title="Ujian tulis" sub="Atur bank soal, jadwal dan token ujian, lalu putuskan kelulusan peserta. Nilai hanya terlihat oleh staf." />
+      <PageHeader title="Ujian online" sub="Atur bank soal, jadwal dan token ujian, lalu putuskan kelulusan peserta. Nilai hanya terlihat oleh staf." />
       <div role="tablist" aria-label="Bagian ujian" className="mb-5 flex gap-1 overflow-x-auto border-b border-line">
         {TABS.map(([k, label]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
@@ -27,7 +27,6 @@ export function UjianAdmin() {
       {tab === 'ujian' && <JadwalUjian />}
       {tab === 'soal' && <BankSoal />}
       {tab === 'hasil' && <HasilSeleksi />}
-      {tab === 'surat' && <PengaturanSurat />}
     </>
   )
 }
@@ -84,7 +83,7 @@ function JadwalUjian() {
                   <button className="btn-primary !min-h-10" onClick={() => setTk({ exam: e, minutes: 60 })}>{t ? 'Token baru' : 'Buat token'}</button>{' '}
                   {t && <button className="btn-ghost !min-h-10" onClick={() => act(revokeExamToken(t.id), 'Token dicabut.')}>Cabut</button>}{' '}
                   <button className="btn-ghost !min-h-10" onClick={() => setF({ ...e, openAt: toLocal(e.openAt), closeAt: toLocal(e.closeAt) } as NonNullable<typeof f>)} aria-label="Ubah ujian"><IconPencil size={16} /></button>{' '}
-                  <button className="btn-ghost !min-h-10" onClick={() => confirm(`Hapus ujian "${e.title}"?`) && act(deleteExam(e.id), 'Ujian dihapus.')} aria-label="Hapus ujian"><IconTrash size={16} /></button>
+                  <button className="btn-ghost !min-h-10" onClick={async () => await ask(`Hapus ujian "${e.title}"?`) && act(deleteExam(e.id), 'Ujian dihapus.')} aria-label="Hapus ujian"><IconTrash size={16} /></button>
                 </td>
               </tr>
             )
@@ -161,7 +160,7 @@ function BankSoal() {
         <button className="btn-ghost" onClick={() => setName({ name: '' })}><IconPlus size={18} />Bank baru</button>
         {bank && <>
           <button className="btn-ghost" onClick={() => setName({ id: bank.id, name: bank.name })}><IconPencil size={16} />Ubah nama</button>
-          <button className="btn-ghost" onClick={() => confirm(`Hapus bank "${bank.name}" beserta soalnya?`) && act(deleteBank(bank.id), 'Bank soal dihapus.', () => setBankId(''))}><IconTrash size={16} />Hapus bank</button>
+          <button className="btn-ghost" onClick={async () => await ask(`Hapus bank "${bank.name}" beserta soalnya?`) && act(deleteBank(bank.id), 'Bank soal dihapus.', () => setBankId(''))}><IconTrash size={16} />Hapus bank</button>
           <span className="flex-1" />
           <button className="btn-ghost" onClick={() => setBulk('')}>Tempel banyak soal</button>
           <button className="btn-primary" onClick={() => setF(blankQ())}><IconPlus size={18} />Tambah soal</button>
@@ -176,7 +175,7 @@ function BankSoal() {
                 <p className="font-medium"><span className="mr-2 text-muted">{i + 1}.</span>{q.body}</p>
                 <div className="flex shrink-0 gap-1">
                   <button className="btn-ghost !min-h-9" onClick={() => edit(q)} aria-label="Ubah soal"><IconPencil size={16} /></button>
-                  <button className="btn-ghost !min-h-9" onClick={() => confirm('Hapus soal ini?') && act(deleteQuestion(q.id), 'Soal dihapus.')} aria-label="Hapus soal"><IconTrash size={16} /></button>
+                  <button className="btn-ghost !min-h-9" onClick={async () => await ask('Hapus soal ini?') && act(deleteQuestion(q.id), 'Soal dihapus.')} aria-label="Hapus soal"><IconTrash size={16} /></button>
                 </div>
               </div>
               <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
@@ -233,7 +232,7 @@ function HasilSeleksi() {
     .map((r) => ({ r, u: s.users.find((x) => x.id === r.userId), p: s.programs.find((x) => x.id === r.programId), a: s.attempts.filter((x) => x.registrationId === r.id && x.finishedAt).sort((m, n) => n.finishedAt.localeCompare(m.finishedAt))[0] }))
     .sort((m, n) => (m.r.stage === 'menunggu_hasil' ? -1 : 0) - (n.r.stage === 'menunggu_hasil' ? -1 : 0) || (n.a?.finishedAt ?? '').localeCompare(m.a?.finishedAt ?? ''))
   const target = rows.find((x) => x.r.id === pick)
-  const options = s.batches.filter((b) => b.programId === target?.r.programId && ['open', 'running'].includes(b.status))
+  const options = s.batches.filter((b) => b.programId === target?.r.programId && b.status === 'open')
   const label: Record<string, string> = { menunggu_hasil: 'Menunggu keputusan', registrasi_ulang: 'Lulus, registrasi ulang', aktif: 'Aktif belajar', tidak_lulus: 'Tidak lulus' }
   return (
     <>
@@ -266,39 +265,14 @@ function HasilSeleksi() {
               {options.map((b) => { const left = b.quota - (s.seats[b.id] ?? 0); return <option key={b.id} value={b.id} disabled={left <= 0}>{b.code} · mulai {dateID(b.startDate)} · {left > 0 ? `sisa ${left}` : 'penuh'}</option> })}
             </select>
           </Field>
-          {options.length === 0 && <p className="text-sm text-amber-800">Belum ada angkatan dibuka untuk program ini. Buat dulu di menu Program dan angkatan.</p>}
+          {options.length === 0 && <p className="text-sm text-amber-800">Belum ada angkatan yang sedang dibuka untuk program ini. Buat dulu di menu Program dan angkatan.</p>}
           <div className="flex gap-2">
             <button className="btn-primary flex-1" disabled={!batchId} onClick={() => act(decideAdmission(target.r.id, true, batchId), 'Peserta dinyatakan lulus. Surat kelulusan dan notifikasi dikirim.', () => setPick(null))}>Lulus dan diterima</button>
-            <button className="btn-danger" onClick={() => confirm('Nyatakan peserta tidak lulus? Keputusan tidak bisa dibatalkan.') && act(decideAdmission(target.r.id, false), 'Peserta dinyatakan tidak lulus.', () => setPick(null))}>Tidak lulus</button>
+            <button className="btn-danger" onClick={async () => await ask('Nyatakan peserta tidak lulus? Keputusan tidak bisa dibatalkan.') && act(decideAdmission(target.r.id, false), 'Peserta dinyatakan tidak lulus.', () => setPick(null))}>Tidak lulus</button>
           </div>
         </div>}
       </Modal>
     </>
-  )
-}
-
-/* ---------- pengaturan surat ---------- */
-function PengaturanSurat() {
-  const st = useStore((x) => x.settings)
-  const act = useAct()
-  const [f, setF] = useState({
-    lpkRegNo: st.lpkRegNo ?? '', ketuaName: st.ketuaName ?? '', batchLabel: st.batchLabel ?? '', email: st.email ?? '', website: st.website ?? '', hotline: st.hotline ?? '',
-    kuliahUmum: st.kuliahUmum ?? '', trainingStart: st.trainingStart ?? '',
-  })
-  const set = (k: keyof typeof f) => (e: any) => setF({ ...f, [k]: e.target.value })
-  return (
-    <form className="card grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3" onSubmit={(e) => { e.preventDefault(); act(saveLetterSettings(f), 'Pengaturan surat disimpan.') }}>
-      <p className="text-sm text-muted sm:col-span-2 lg:col-span-3">Isi surat kelulusan diambil dari data peserta dan pengaturan ini. Tanggal registrasi ulang, batas pengembalian dana, dan pelunasan diatur bagian keuangan di menu Biaya.</p>
-      <Field label="Nomor registrasi LPK"><input className="input" value={f.lpkRegNo} onChange={set('lpkRegNo')} /></Field>
-      <Field label="Nama ketua LPK (penanda tangan)"><input className="input" required value={f.ketuaName} onChange={set('ketuaName')} /></Field>
-      <Field label="Nama batch" hint="Contoh: Batch Ganjil TA. 2026/2027"><input className="input" required value={f.batchLabel} onChange={set('batchLabel')} /></Field>
-      <Field label="Hotline pembayaran"><input className="input" type="tel" value={f.hotline} onChange={set('hotline')} /></Field>
-      <Field label="Email lembaga"><input className="input" type="email" value={f.email} onChange={set('email')} /></Field>
-      <Field label="Situs web"><input className="input" value={f.website} onChange={set('website')} /></Field>
-      <Field label="Tanggal kuliah umum"><input className="input" type="date" value={f.kuliahUmum} onChange={set('kuliahUmum')} /></Field>
-      <Field label="Tanggal mulai pelatihan"><input className="input" type="date" value={f.trainingStart} onChange={set('trainingStart')} /></Field>
-      <div className="sm:col-span-2 lg:col-span-3"><button className="btn-primary">Simpan</button></div>
-    </form>
   )
 }
 
@@ -337,8 +311,8 @@ function BiayaPokok() {
     <form className="card divide-y divide-line" onSubmit={(e) => { e.preventDefault(); act(saveFees(f), 'Pengaturan biaya disimpan.') }}>
       <section className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
         <div className="sm:col-span-2 lg:col-span-3"><h2 className="font-bold">Biaya</h2><p className="text-sm text-muted">Biaya pendaftaran yang sudah dibayar peserta mengurangi total yang dicicil saat registrasi ulang.</p></div>
-        <Field label="Biaya pendaftaran (Rp)"><input className="input tabular-nums" type="number" min={0} required value={f.regFee} onChange={set('regFee')} /></Field>
-        <Field label="Minimal registrasi ulang (Rp)" hint="Dicetak di surat kelulusan."><input className="input tabular-nums" type="number" min={0} required value={f.minReenroll} onChange={set('minReenroll')} /></Field>
+        <Field label="Biaya pendaftaran (Rp)"><MoneyInput required value={f.regFee} onValue={(n) => setF({ ...f, regFee: n })} /></Field>
+        <Field label="Minimal registrasi ulang (Rp)" hint="Dicetak di surat kelulusan."><MoneyInput required value={f.minReenroll} onValue={(n) => setF({ ...f, minReenroll: n })} /></Field>
       </section>
       <section className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
         <h2 className="font-bold sm:col-span-2 lg:col-span-3">Rekening pembayaran</h2>
@@ -375,7 +349,7 @@ function TotalBiaya() {
           return (
             <tr key={p.id}>
               <td className="font-semibold">{p.title}</td>
-              <td><input className="input !min-h-10 min-w-36 text-right tabular-nums" type="number" min={0} aria-label={`Biaya pelatihan ${p.title}`} value={price} onChange={(e) => setPrices({ ...prices, [p.id]: +e.target.value })} /></td>
+              <td><MoneyInput className="!min-h-10 min-w-36 text-right" aria-label={`Biaya pelatihan ${p.title}`} value={price} onValue={(n) => setPrices({ ...prices, [p.id]: n })} /></td>
               <td className="tabular-nums">{rupiah(extra)}</td>
               <td className="font-semibold tabular-nums">{rupiah(price + extra)}</td>
               <td className="tabular-nums">{rupiah(Math.max(0, price + extra - regFee))}</td>
@@ -409,7 +383,7 @@ function BiayaTambahan() {
               <td>{x.active ? <span className="text-sm font-medium text-emerald-700">Aktif</span> : <span className="text-sm text-muted">Nonaktif</span>}</td>
               <td className="whitespace-nowrap text-right">
                 <button className="btn-ghost !min-h-10" onClick={() => setItem(x)} aria-label={`Ubah ${x.name}`}><IconPencil size={16} /></button>{' '}
-                <button className="btn-ghost !min-h-10" onClick={() => confirm(`Hapus biaya "${x.name}"? Jadwal cicilan yang sudah dibuat tidak berubah.`) && act(deleteFeeItem(x.id), 'Biaya dihapus.')} aria-label={`Hapus ${x.name}`}><IconTrash size={16} /></button>
+                <button className="btn-ghost !min-h-10" onClick={async () => await ask(`Hapus biaya "${x.name}"? Jadwal cicilan yang sudah dibuat tidak berubah.`) && act(deleteFeeItem(x.id), 'Biaya dihapus.')} aria-label={`Hapus ${x.name}`}><IconTrash size={16} /></button>
               </td>
             </tr>
           ))}
@@ -418,7 +392,7 @@ function BiayaTambahan() {
       <Modal open={!!item} title={item?.id ? 'Ubah biaya tambahan' : 'Biaya tambahan baru'} onClose={() => setItem(null)}>
         {item && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(saveFeeItem(item), 'Biaya disimpan.', () => setItem(null)) }}>
           <Field label="Nama biaya"><input className="input" required value={item.name} onChange={(e) => setItem({ ...item, name: e.target.value })} /></Field>
-          <Field label="Nominal (Rp)"><input className="input" type="number" min={0} required value={item.amount} onChange={(e) => setItem({ ...item, amount: +e.target.value })} /></Field>
+          <Field label="Nominal (Rp)"><MoneyInput required value={item.amount} onValue={(n) => setItem({ ...item, amount: n })} /></Field>
           <Field label="Berlaku untuk"><select className="input" value={item.programId} onChange={(e) => setItem({ ...item, programId: e.target.value })}><option value="">Semua program</option>{s.programs.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-brand-600" checked={item.active} onChange={(e) => setItem({ ...item, active: e.target.checked })} />Aktif (masuk ke total peserta)</label>
           <button className="btn-primary w-full">Simpan</button>
@@ -431,7 +405,7 @@ function BiayaTambahan() {
 function PaketCicilan() {
   const s = useStore((x) => x)
   const act = useAct()
-  const [plan, setPlan] = useState<(Omit<PaymentPlan, 'id'> & { id?: string }) | null>(null)
+  const [plan, setPlan] = useState<(Omit<PaymentPlan, 'id'> & { id?: string; programIds: string[] }) | null>(null)
   const programs = s.programs.filter((p) => !p.archived)
   const sample = programs[0]
   const sampleTotal = sample ? Math.max(0, sample.price + s.feeItems.filter((x) => x.active && (!x.programId || x.programId === sample.id)).reduce((t, x) => t + x.amount, 0) - (s.settings.regFee ?? 0)) : 0
@@ -439,7 +413,7 @@ function PaketCicilan() {
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-xl text-sm text-muted">Termin 1 berarti bayar sekali. Termin lebih dari 1: pembayaran pertama sebesar uang muka, sisanya dibagi rata sampai batas pelunasan.</p>
-        <button className="btn-primary" onClick={() => setPlan({ name: '', programId: '', downPayment: s.settings.minReenroll ?? 1000000, installments: 3, active: true })}><IconPlus size={18} />Paket baru</button>
+        <button className="btn-primary" onClick={() => setPlan({ name: '', programId: '', programIds: [], downPayment: s.settings.minReenroll ?? 1000000, installments: 3, active: true })}><IconPlus size={18} />Paket baru</button>
       </div>
       {s.plans.length === 0 ? <div className="card"><Empty title="Belum ada paket" body="Tanpa paket, peserta tidak bisa memilih cara membayar registrasi ulang." /></div> : (
         <Table head={['Paket', 'Program', 'Uang muka', 'Termin', sample ? `Contoh: ${sample.title}` : 'Contoh', '']}>
@@ -452,8 +426,8 @@ function PaketCicilan() {
                 <td className="tabular-nums">{rupiah(p.downPayment)}</td><td>{p.installments}x</td>
                 <td className="text-xs text-muted">{!sample ? '-' : v.count === 0 ? `${rupiah(v.first)} sekaligus` : `${rupiah(v.first)} + ${v.count} x ${rupiah(v.each)}`}</td>
                 <td className="whitespace-nowrap text-right">
-                  <button className="btn-ghost !min-h-10" onClick={() => setPlan(p)} aria-label={`Ubah ${p.name}`}><IconPencil size={16} /></button>{' '}
-                  <button className="btn-ghost !min-h-10" onClick={() => confirm(`Hapus paket "${p.name}"?`) && act(deletePlan(p.id), 'Paket dihapus atau dinonaktifkan.')} aria-label={`Hapus ${p.name}`}><IconTrash size={16} /></button>
+                  <button className="btn-ghost !min-h-10" onClick={() => setPlan({ ...p, programIds: p.programId ? [p.programId] : [] })} aria-label={`Ubah ${p.name}`}><IconPencil size={16} /></button>{' '}
+                  <button className="btn-ghost !min-h-10" onClick={async () => await ask(`Hapus paket "${p.name}"?`) && act(deletePlan(p.id), 'Paket dihapus atau dinonaktifkan.')} aria-label={`Hapus ${p.name}`}><IconTrash size={16} /></button>
                 </td>
               </tr>
             )
@@ -463,9 +437,19 @@ function PaketCicilan() {
       <Modal open={!!plan} title={plan?.id ? 'Ubah paket' : 'Paket baru'} onClose={() => setPlan(null)}>
         {plan && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(savePlan(plan), 'Paket disimpan.', () => setPlan(null)) }}>
           <Field label="Nama paket"><input className="input" required value={plan.name} onChange={(e) => setPlan({ ...plan, name: e.target.value })} /></Field>
-          <Field label="Berlaku untuk"><select className="input" value={plan.programId} onChange={(e) => setPlan({ ...plan, programId: e.target.value })}><option value="">Semua program</option>{programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
+          <fieldset>
+            <legend className="label">Berlaku untuk</legend>
+            <div className="space-y-1 rounded-lg border border-line p-3">
+              <label className="flex min-h-9 items-center gap-2 text-sm font-semibold"><input type="checkbox" className="size-4 accent-brand-600" checked={plan.programIds.length === 0} onChange={() => setPlan({ ...plan, programIds: [] })} />Semua program</label>
+              {programs.map((p) => (
+                <label key={p.id} className="flex min-h-9 items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-brand-600" checked={plan.programIds.includes(p.id)}
+                  onChange={(e) => setPlan({ ...plan, programIds: e.target.checked ? [...plan.programIds, p.id] : plan.programIds.filter((x) => x !== p.id) })} />{p.title}</label>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-muted">Centang satu atau beberapa program. Tanpa centang program berarti berlaku untuk semua program.{plan.programIds.length > 1 ? ` Disimpan sebagai ${plan.programIds.length} paket terpisah, satu per program.` : ''}</p>
+          </fieldset>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Uang muka (Rp)" hint="Pembayaran pertama."><input className="input" type="number" min={0} required value={plan.downPayment} onChange={(e) => setPlan({ ...plan, downPayment: +e.target.value })} /></Field>
+            <Field label="Uang muka (Rp)" hint="Pembayaran pertama."><MoneyInput required value={plan.downPayment} onValue={(n) => setPlan({ ...plan, downPayment: n })} /></Field>
             <Field label="Jumlah termin" hint="Termasuk uang muka."><input className="input" type="number" min={1} max={36} required value={plan.installments} onChange={(e) => setPlan({ ...plan, installments: +e.target.value })} /></Field>
           </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-brand-600" checked={plan.active} onChange={(e) => setPlan({ ...plan, active: e.target.checked })} />Paket aktif</label>

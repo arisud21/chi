@@ -1,9 +1,10 @@
 import { IconAlertCircle, IconCheck, IconDownload, IconUpload } from '@tabler/icons-react'
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, Field, Modal, PageHeader, Table, dateID, rupiah, useAct } from '../../components/ui'
+import { Badge, Field, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct } from '../../components/ui'
 import { itemsFor, shortfallOf, summarize } from '../../lib/billing'
-import { DOC_KINDS, DOC_LABEL, choosePlan, submitProof, uploadDocument, useStore } from '../../lib/store'
+import { WaButton } from '../../lib/wa'
+import { DOC_KINDS, DOC_LABEL, choosePlan, resumeRegistration, submitProof, uploadDocument, useStore } from '../../lib/store'
 import type { DocKind, Installment, PayKind, PaymentPlan, Registration, Stage } from '../../lib/types'
 import { useMe } from './Peserta'
 
@@ -19,7 +20,7 @@ export function planPreview(total: number, plan: Pick<PaymentPlan, 'downPayment'
 }
 
 /** Unggah bukti transfer untuk satu jenis pembayaran. */
-function ProofButton({ reg, kind, amount, installmentId, label }: { reg: Registration; kind: PayKind; amount: number; installmentId?: string; label: string }) {
+function ProofButton({ reg, kind, amount, installmentId, label, fixed = false }: { reg: Registration; kind: PayKind; amount: number; installmentId?: string; label: string; fixed?: boolean }) {
   const s = useStore((x) => x)
   const act = useAct()
   const [open, setOpen] = useState(false)
@@ -41,7 +42,7 @@ function ProofButton({ reg, kind, amount, installmentId, label }: { reg: Registr
           <Field label="Nama pengirim"><input className="input" required value={f.payerName} onChange={(e) => setF({ ...f, payerName: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Tanggal transfer"><input className="input" type="date" required value={f.transferDate} onChange={(e) => setF({ ...f, transferDate: e.target.value })} /></Field>
-            <Field label="Nominal (Rp)"><input className="input" type="number" required value={f.amountPaid} onChange={(e) => setF({ ...f, amountPaid: +e.target.value })} /></Field>
+            <Field label="Nominal (Rp)" hint={fixed ? 'Sesuai total biaya pelatihan (paket lunas sekali bayar).' : undefined}><MoneyInput className="read-only:bg-brand-50" required readOnly={fixed} value={f.amountPaid} onValue={(n) => setF({ ...f, amountPaid: n })} /></Field>
           </div>
           <Field label="Bukti transfer" hint="JPG, PNG, atau PDF. Maksimal 2 MB."><input className="input !py-2" type="file" accept=".jpg,.jpeg,.png,.pdf" required onChange={(e) => setF({ ...f, file: e.target.files?.[0] ?? null })} /></Field>
           <button className="btn-primary w-full">Kirim bukti</button>
@@ -125,10 +126,12 @@ function Reenroll({ reg }: { reg: Registration }) {
       {first && first.status === 'unpaid' && (
         <div>
           <p className="text-sm">Transfer <b>{rupiah(first.amount)}</b>{s.settings.reenrollDue ? `, paling lambat ${dateID(s.settings.reenrollDue)}` : ''}. Minimal registrasi ulang {rupiah(Math.min(min, first.amount))}.</p>
-          <p className="mt-1 text-xs text-muted">Bayar lebih dari itu: kelebihan langsung memotong cicilan berikutnya. Bayar kurang dari minimal: tetap bisa diunggah dan diterima keuangan, tetapi Anda wajib segera melunasi kekurangannya.</p>
+          {insts.length === 1
+            ? <p className="mt-1 text-xs text-muted">Paket lunas sekali bayar: nominal yang diunggah sesuai total biaya pelatihan. Bagian keuangan mencocokkannya dengan bukti transfer. Bila nominal pada bukti berbeda, keuangan menyesuaikannya dan kekurangannya menjadi tagihan Anda yang harus dilunasi.</p>
+            : <p className="mt-1 text-xs text-muted">Bayar lebih dari itu: kelebihan langsung memotong cicilan berikutnya. Bayar kurang dari minimal: tetap bisa diunggah dan diterima keuangan, tetapi Anda wajib segera melunasi kekurangannya.</p>}
           <Bank />
           <PaymentState reg={reg} kind="registrasi_ulang" installmentId={first.id} />
-          <div className="mt-3"><ProofButton reg={reg} kind="registrasi_ulang" amount={first.amount} installmentId={first.id} label="Unggah bukti registrasi ulang" /></div>
+          <div className="mt-3"><ProofButton reg={reg} kind="registrasi_ulang" amount={first.amount} installmentId={first.id} fixed={insts.length === 1} label="Unggah bukti registrasi ulang" /></div>
         </div>
       )}
       {first && first.status === 'submitted' && <p className="rounded-lg bg-sky-50 p-3 text-sm font-medium text-sky-900">Bukti registrasi ulang terkirim, menunggu konfirmasi.</p>}
@@ -143,22 +146,41 @@ const DOC_HINT: Record<DocKind, string> = {
 }
 
 /** Lima berkas yang diunggah setelah registrasi ulang dikonfirmasi. Yang sudah terunggah tidak bisa diganti sendiri. */
-function Berkas() {
+function Berkas({ programTitle }: { programTitle: string }) {
   const docs = useStore((x) => x.documents)
   const act = useAct()
   const inputs = useRef<Partial<Record<DocKind, HTMLInputElement | null>>>({})
   const [busy, setBusy] = useState<DocKind | null>(null)
+  const [last, setLast] = useState<{ kind: DocKind; file: File } | null>(null)
   const pick = async (kind: DocKind, file: File | undefined) => {
     if (!file) return
     const okTypes = kind === 'foto' ? ['image/jpeg', 'image/png'] : ['image/jpeg', 'image/png', 'application/pdf']
     if (!okTypes.includes(file.type)) return act(Promise.resolve({ ok: false, error: kind === 'foto' ? 'Pas foto harus JPG atau PNG.' : 'Format harus JPG, PNG, atau PDF.' }), '')
     if (file.size > 2 * 1024 * 1024) return act(Promise.resolve({ ok: false, error: 'Ukuran berkas maksimal 2 MB.' }), '')
+    // Berkas terakhir mengunci program pilihan, jadi minta konfirmasi dulu.
+    if (docs.length === DOC_KINDS.length - 1 && !docs.some((d) => d.kind === kind)) { setLast({ kind, file }); return }
+    await send(kind, file)
+  }
+  const send = async (kind: DocKind, file: File) => {
     setBusy(kind)
     await act(uploadDocument(kind, file), `${DOC_LABEL[kind]} terunggah.`)
     setBusy(null)
     if (inputs.current[kind]) inputs.current[kind]!.value = ''
   }
+  const cancelLast = () => { if (last && inputs.current[last.kind]) inputs.current[last.kind]!.value = ''; setLast(null) }
   return (
+    <>
+    <Modal open={!!last} title="Ini berkas terakhir" onClose={cancelLast}>
+      <div className="space-y-3 text-sm">
+        <p>Setelah <b>{last ? DOC_LABEL[last.kind] : ''}</b> terunggah, kelima berkas lengkap dan <b>program pilihan Anda tidak dapat diubah lagi</b>.</p>
+        <p className="rounded-lg bg-canvas p-3">Program Anda: <b>{programTitle}</b></p>
+        <p className="text-muted">Bila ingin mengganti program, batalkan dulu dan hubungi admin pendaftaran.</p>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-primary flex-1" onClick={() => { const l = last!; setLast(null); send(l.kind, l.file) }}>Program sudah benar, unggah</button>
+          <button className="btn-ghost" onClick={cancelLast}>Batal</button>
+        </div>
+      </div>
+    </Modal>
     <ul className="divide-y divide-line">
       {DOC_KINDS.map((k) => {
         const d = docs.find((x) => x.kind === k)
@@ -178,6 +200,7 @@ function Berkas() {
         )
       })}
     </ul>
+    </>
   )
 }
 
@@ -250,11 +273,28 @@ function BerandaPeserta({ reg }: { reg: Registration }) {
   const prog = s.programs.find((p) => p.id === reg.programId)
   const batch = s.batches.find((b) => b.id === reg.batchId)
   const docsDone = DOC_KINDS.every((k) => s.documents.some((d) => d.kind === k))
+  const newsPending = useStore((x) => x.news.some((n) => n.eligible && !n.read)) // berita dibaca dulu, baru pengingat program
+  const remindKey = `program-reminder-${reg.id}`
+  const [remind, setRemind] = useState(() => { if (docsDone) return false; try { return !sessionStorage.getItem(remindKey) } catch { return true } })
+  const closeRemind = () => { try { sessionStorage.setItem(remindKey, '1') } catch { /* tanpa penyimpanan, popup muncul lagi saat dibuka ulang */ } setRemind(false) }
   const short = shortfallOf(s, reg.id)
   const firstInst = s.installments.filter((i) => i.registrationId === reg.id).sort((a, b) => a.seq - b.seq)[0]
   return (
     <>
-      <PageHeader title={`Halo, ${me.name.split(' ')[0]}`} sub={`${prog?.title ?? ''}${batch ? ` · ${batch.code}` : ''}`} action={<Badge status="aktif" />} />
+      <Modal open={remind && !newsPending} title="Periksa program pilihan Anda" onClose={closeRemind}>
+        <div className="space-y-3 text-sm">
+          <p className="rounded-lg bg-canvas p-3">Program yang Anda pilih: <b>{prog?.title}</b></p>
+          <p>Sebelum mengunggah berkas, pastikan program ini sudah sesuai. Bila ingin mengubahnya, <b>hubungi admin pendaftaran sekarang</b>.</p>
+          <p className="font-medium text-amber-900">Begitu kelima berkas selesai diunggah, program tidak dapat diubah lagi.</p>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-primary flex-1" onClick={closeRemind}>Program sudah benar</button>
+            <WaButton phone={s.settings.whatsapp} label="Ubah program via WhatsApp" text={`Halo Admin, saya ${me.name} (${reg.code}). Saya ingin mengubah program pilihan saya dari ${prog?.title ?? '-'} sebelum mengunggah berkas.`} />
+          </div>
+        </div>
+      </Modal>
+      <PageHeader title={`Halo, ${me.name.split(' ')[0]}`} sub={`${prog?.title ?? ''}${batch ? ` · ${batch.code}` : ''}`} action={<div className="flex flex-wrap items-center gap-2">
+        {s.settings.hotline && <WaButton phone={s.settings.hotline} label="Hubungi hotline" text={`Halo Admin Cimahi Hotel Institute, saya ${me.name} (NIP ${reg.nip ?? reg.code}), peserta didik ${prog?.title ?? ''}. Saya ingin bertanya.`} />}
+        <Badge status="aktif" /></div>} />
 
       <section aria-labelledby="nip" className="card mb-6 grid gap-5 p-5 sm:grid-cols-[auto_1fr] sm:items-center">
         <div>
@@ -282,12 +322,15 @@ function BerandaPeserta({ reg }: { reg: Registration }) {
       <section aria-labelledby="mulai" className="card mt-6 p-5">
         <h2 id="mulai" className="font-bold">{docsDone ? 'Ruang belajar' : 'Untuk memulai kelas'}</h2>
         {docsDone
-          ? <p className="mt-1 flex items-center gap-1.5 text-sm text-emerald-700"><IconCheck size={16} />Kelima berkas sudah terunggah. Perubahan berkas hanya lewat admin pendaftaran.</p>
+          ? <p className="mt-1 flex items-center gap-1.5 text-sm text-emerald-700"><IconCheck size={16} />Kelima berkas sudah terunggah. Program pilihan terkunci, dan perubahan berkas hanya lewat admin pendaftaran.</p>
           : <>
             <p className="mt-1 text-sm text-muted">Lengkapi berkas dulu. {s.documents.length} dari {DOC_KINDS.length} sudah terunggah.</p>
-            <div className="mt-3"><Berkas /></div>
+            <p className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Program pilihan: <b>{prog?.title}</b>. Program tidak dapat diubah setelah kelima berkas terunggah. Ingin mengubah? Hubungi admin pendaftaran sebelum mengunggah berkas terakhir.</p>
+            <div className="mt-3"><Berkas programTitle={prog?.title ?? '-'} /></div>
           </>}
-        <Link to="/app/belajar" className="btn-primary mt-4 w-full sm:w-auto">Buka ruang belajar</Link>
+        {docsDone
+          ? <Link to="/app/belajar" className="btn-primary mt-4 w-full sm:w-auto">Buka ruang belajar</Link>
+          : <button type="button" className="btn-primary mt-4 w-full sm:w-auto" disabled aria-disabled="true">Buka ruang belajar (unggah semua berkas dulu)</button>}
       </section>
     </>
   )
@@ -296,6 +339,7 @@ function BerandaPeserta({ reg }: { reg: Registration }) {
 /** Halaman tahapan: satu registrasi, satu langkah aktif. */
 export function Tahapan() {
   const { s, me, regs } = useMe()
+  const act = useAct()
   const reg = regs.find((r) => r.status === 'pending_payment' || r.status === 'active' || r.status === 'completed') ?? regs[0]
   if (!reg) return <><PageHeader title="Tahapan" /><div className="card p-6 text-sm text-muted">Belum ada registrasi. <Link className="font-semibold text-brand-600" to="/daftar">Lakukan registrasi</Link>.</div></>
   if (reg.stage === 'aktif') return <BerandaPeserta reg={reg} />
@@ -308,8 +352,17 @@ export function Tahapan() {
 
   return (
     <>
-      <PageHeader title="Tahapan penerimaan" sub={`${prog?.title ?? ''} · ${reg.code}`} action={<Badge status={dead ? reg.status : reg.stage} />} />
-      {dead && <div role="alert" className="mb-5 flex gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm"><IconAlertCircle className="shrink-0 text-amber-700" /><p>{reg.status === 'expired' ? 'Registrasi ulang melewati batas waktu, sehingga Anda dianggap mengundurkan diri.' : reg.cancelledReason || 'Registrasi dibatalkan.'} Hubungi admin bila ini keliru.</p></div>}
+      <PageHeader title="Tahapan penerimaan" sub={`${prog?.title ?? ''} · ${reg.code}`} action={<div className="flex flex-wrap items-center gap-2">
+        {s.settings.hotline && <WaButton phone={s.settings.hotline} label="Hubungi hotline" text={`Halo Admin Cimahi Hotel Institute, saya ${me.name} (${reg.code}), pendaftar ${prog?.title ?? 'pelatihan'}. Saya ingin bertanya terkait pendaftaran.`} />}
+        <Badge status={dead ? reg.status : reg.stage} /></div>} />
+      {reg.canResume && <div role="alert" className="mb-5 flex flex-wrap items-center gap-4 rounded-xl border border-red-300 bg-red-50 p-4 text-sm">
+        <IconAlertCircle className="shrink-0 text-red-700" />
+        <p className="min-w-0 flex-1">{reg.autoWithdrawn
+          ? <><b>Anda telah dinyatakan mengundurkan diri</b> karena tidak melanjutkan proses pendaftaran atau registrasi selama 2 minggu. Keputusan ini dibuat otomatis oleh sistem.</>
+          : <><b>Pendaftaran Anda berstatus mundur.</b>{reg.cancelledReason && reg.cancelledReason !== '-' ? ` Alasan tercatat: ${reg.cancelledReason}.` : ''}</>} Anda tetap dapat melanjutkan prosesnya dari tahap terakhir dengan menekan tombol Lanjutkan proses.</p>
+        <button className="btn-primary" onClick={() => act(resumeRegistration(reg.id), 'Proses dilanjutkan. Selesaikan tahapan berikutnya dalam 2 minggu.')}>Lanjutkan proses</button>
+      </div>}
+      {dead && !reg.canResume && <div role="alert" className="mb-5 flex gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm"><IconAlertCircle className="shrink-0 text-amber-700" /><p>{reg.status === 'expired' ? 'Registrasi ulang melewati batas waktu, sehingga Anda dianggap mengundurkan diri.' : reg.cancelledReason || 'Registrasi dibatalkan.'} Hubungi admin bila ini keliru.</p></div>}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <ol className="min-w-0">
         <Step n={1} title="Registrasi" state="done">Akun dibuat {dateID(reg.createdAt)}.</Step>
@@ -320,15 +373,15 @@ export function Tahapan() {
 
         <Step n={3} title={`Bayar pendaftaran ${rupiah(regFee)}`} state={needsData ? 'next' : st(1)}>
           {reg.stage === 'bayar_daftar' || reg.stage === 'data' ? <>
-            <p className="text-sm">Transfer tepat <b>{rupiah(regFee)}</b>, lalu unggah bukti. Tanpa bukti pembayaran, ujian tulis belum bisa dibuka.</p>
+            <p className="text-sm">Transfer tepat <b>{rupiah(regFee)}</b>, lalu unggah bukti. Tanpa bukti pembayaran, ujian online belum bisa dibuka.</p>
             <Bank />
             <PaymentState reg={reg} kind="pendaftaran" />
             <div className="mt-3"><ProofButton reg={reg} kind="pendaftaran" amount={regFee} label="Unggah bukti pembayaran" /></div>
           </> : 'Pembayaran pendaftaran sudah dikonfirmasi.'}
         </Step>
 
-        <Step n={4} title="Ujian tulis" state={st(2)}>
-          {reg.stage === 'ujian' ? <><p className="text-sm">Ujian dikerjakan di aplikasi dengan token dari admin. Soal diambil acak dari bank soal. Nilai tidak ditampilkan ke peserta.</p><Link to="/app/ujian" className="btn-primary mt-3">Buka halaman ujian</Link></> : 'Ujian selesai dikerjakan.'}
+        <Step n={4} title="Ujian online" state={st(2)}>
+          {reg.stage === 'ujian' ? <><p className="text-sm">Ujian dikerjakan di aplikasi. Token diberikan otomatis oleh sistem (berlaku 1 hari), tidak perlu menghubungi admin. Selesaikan ujian agar bisa lanjut ke tahap berikutnya. Soal diambil acak dari bank soal. Nilai tidak ditampilkan ke peserta.</p><Link to="/app/ujian" className="btn-primary mt-3">Buka halaman ujian</Link></> : 'Ujian selesai dikerjakan.'}
         </Step>
 
         <Step n={5} title="Hasil seleksi" state={reg.stage === 'menunggu_hasil' ? 'now' : reg.stage === 'tidak_lulus' ? 'done' : st(3)}>

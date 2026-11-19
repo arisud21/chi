@@ -1,9 +1,10 @@
 // Mengisi data demo. Aman dijalankan ulang: mengosongkan tabel data lalu mengisi kembali. HANYA untuk pengembangan.
 import bcrypt from 'bcryptjs'
-import { DEFAULT_CONFIG } from './pdf.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { UPLOAD_DIR, pool, q, uid } from './lib.js'
+import { migrate } from './migrate.js'
+import { importBankSoal } from './bankSoal.js'
 
 if (process.env.NODE_ENV === 'production') throw new Error('Seed demo tidak boleh dijalankan di produksi.')
 
@@ -11,8 +12,9 @@ const day = 86_400_000
 const at = (n) => new Date(Date.now() + n * day)
 const dateOnly = (n) => at(n).toISOString().slice(0, 10)
 
-const tables = ['registration_documents', 'exam_tokens', 'fee_items', 'exam_attempts', 'exams', 'questions', 'question_banks', 'notifications', 'installments', 'payment_plans', 'batch_subjects', 'participant_profiles', 'submissions', 'assignments', 'attendances', 'grades', 'certificates', 'certificate_sequences', 'certificate_templates', 'payments', 'materials', 'class_sessions', 'subjects',
+const tables = ['news_reads', 'news', 'logbook_entries', 'placements', 'companies', 'registration_documents', 'exam_tokens', 'fee_items', 'exam_attempts', 'exams', 'questions', 'question_banks', 'notifications', 'installments', 'payment_plans', 'batch_subjects', 'participant_profiles', 'submissions', 'assignments', 'attendances', 'subject_grades', 'grades', 'certificates', 'certificate_sequences', 'certificate_templates', 'payments', 'materials', 'class_sessions', 'subjects',
   'registrations', 'batches', 'programs', 'email_tokens', 'email_queue', 'audit_logs', 'landing_revisions', 'settings', 'files', 'users']
+await migrate()
 await q('SET FOREIGN_KEY_CHECKS = 0')
 for (const t of tables) await q(`TRUNCATE TABLE ${t}`)
 await q('SET FOREIGN_KEY_CHECKS = 1')
@@ -75,7 +77,17 @@ const batchSubjects = {
   fo0: [['Pengantar Industri Perhotelan', 1], ['Reservasi dan Front Desk', 4], ['Check-in dan Check-out', 4], ['Penanganan Keluhan Tamu', 2], ['Bahasa Inggris Perhotelan', 1]],
   fo1: [['Pengantar Industri Perhotelan', 1], ['Reservasi dan Front Desk', 3], ['Check-in dan Check-out', 3], ['Penanganan Keluhan Tamu', 2], ['Etika dan Standar Pelayanan', 1]],
 }
-for (const [bk, list] of Object.entries(batchSubjects)) for (const [name, n] of list) await q('INSERT INTO batch_subjects (batch_id, subject_id, sessions_planned) VALUES (?,?,?)', [B[bk], SJ[name], n])
+// Jadwal per mata pelajaran: instruktur, hari, jam, dan ruang masing-masing. Bahasa Inggris di FO-2026-B2 diajar instruktur lain.
+const slot = {
+  fo0: (name) => name === 'Bahasa Inggris Perhotelan' ? ['ins2', 'Sab', '09:00', '11:00', 'Lab Bahasa'] : ['ins1', 'Sen,Rab,Jum', '09:00', '12:00', 'Ruang Simulasi Lt. 2'],
+  fo1: () => ['ins1', 'Sel,Kam', '13:00', '16:00', 'Ruang Simulasi Lt. 2'],
+}
+for (const [bk, list] of Object.entries(batchSubjects)) for (const [name, n] of list) {
+  const [ins, days, start, end, room] = slot[bk](name)
+  await q('INSERT INTO batch_subjects (batch_id, subject_id, sessions_planned, instructor_id, schedule_days, start_time, end_time, room) VALUES (?,?,?,?,?,?,?,?)', [B[bk], SJ[name], n, U[ins], days, start, end, room])
+}
+await q('UPDATE users SET instructor_program = ? WHERE id = ?', [P.fo, U.ins1])
+await q('UPDATE users SET instructor_program = ? WHERE id = ?', [P.tb, U.ins2])
 
 const R = {}
 const regs = [
@@ -94,7 +106,7 @@ await q("INSERT INTO payments (id, registration_id, amount_due, amount_paid, pay
 await q('INSERT INTO grades (registration_id) VALUES (?), (?)', [R.r1, R.r5])
 await q("INSERT INTO payments (id, registration_id, amount_due, amount_paid, payer_name, transfer_date, status, receipt_no, verified_by, created_at) VALUES (?,?,?,?,?,?,'verified',?,?,?)", [uid(), R.r5, 2500331, 2500331, 'Peserta Belum Isi Data', dateOnly(-41), 'KWT-202610-005', U.uang, at(-41)])
 for (const [k, nik, tp, gender] of [['p1', '3277010101000001', 'Cimahi', 'L'], ['p3', '3277010101000003', 'Bandung', 'P']]) {
-  await q("INSERT INTO participant_profiles (user_id, nik, birth_place, birth_date, gender, address, rt, rw, district_id, district, city_id, city, province_id, province, postal_code, education, occupation, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [U[k], nik, tp, '2000-01-01', gender, 'Jl. Contoh No. 1', '01', '02', '3277010', 'Cimahi Selatan', '3277', 'Kota Cimahi', '32', 'Jawa Barat', '40511', 'SMA/SMK', 'Belum bekerja', new Date()])
+  await q("INSERT INTO participant_profiles (user_id, nik, birth_place, birth_date, gender, address, rt, rw, district_id, district, city_id, city, province_id, province, postal_code, education, occupation, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [U[k], nik, tp, '2000-01-01', gender, 'Jl. Contoh No. 1', '01', '02', '3277010', 'Cimahi Selatan', '3277', 'Kota Cimahi', '32', 'Jawa Barat', '40511', 'SMA/SMK/MA', 'Belum bekerja', new Date()])
   await q('UPDATE users SET nik = ?, birth_date = ? WHERE id = ?', [nik, '2000-01-01', U[k]])
 }
 await q("INSERT INTO grades (registration_id, theory, practical, attendance_pct, status) VALUES (?,88,92,96,'submitted')", [R.r4])
@@ -107,14 +119,11 @@ for (const [title, n, mapel] of [['Simulasi check-in tamu grup', 1, 'Check-in da
 await q('INSERT INTO materials (id, batch_id, session_id, title, kind, url) VALUES (?,?,?,?,?,?)', [uid(), B.fo0, S[1], 'Rekaman praktik penanganan keluhan', 'Tautan', 'https://example.com/rekaman'])
 await q('INSERT INTO assignments (id, batch_id, title, description, due_at) VALUES (?,?,?,?,?)', [uid(), B.fo0, 'Laporan simulasi check-in', 'Tulis refleksi singkat dari simulasi check-in tamu grup.', at(5)])
 
-await q('INSERT INTO certificate_templates (id, version, config, is_active) VALUES (?,?,?,1)', [uid(), 1, JSON.stringify(DEFAULT_CONFIG)])
-
 const site = {
-  name: 'Cimahi Institute Hotel', bankName: 'Bank BNI', bankAccount: '2040792254', bankHolder: 'Daya Juang Bersama Yayasan', payDueHours: 48,
+  name: 'Cimahi Hotel Institute', bankName: 'Bank BNI', bankAccount: '2040792254', bankHolder: 'Daya Juang Bersama Yayasan', payDueHours: 48,
   regFee: 200000, minReenroll: 1000000, reenrollDue: dateOnly(30), refundCutoff: dateOnly(14), pelunasanDue: dateOnly(150),
   lpkRegNo: '32.77.03.1004.35.2024', ketuaName: 'Dr. Gerinata Ginting, M.M.', batchLabel: 'Batch Ganjil TA. 2026/2027', email: 'infolpk.chi@gmail.com', website: 'cimahihotelinstitute.org', hotline: '08216733273',
   phone: '0821 673 3273', whatsapp: '6280000000000', address: 'Jalan Pasantren KM.2, Cibabat, Cimahi Utara, Kota Cimahi 40513 Jawa Barat', hours: 'Senin sampai Jumat, 08.00 sampai 16.00',
-  signerName: '(isi nama penanda tangan)', signerTitle: 'Kepala Akademik',
 }
 await q('INSERT INTO payment_plans (id, program_id, name, down_payment, installments) VALUES (?,NULL,?,?,?), (?,NULL,?,?,?), (?,NULL,?,?,?)',
   [uid(), 'Lunas sekali bayar', 0, 1, uid(), 'Cicilan 3 kali (uang muka Rp1.000.000)', 1000000, 3, uid(), 'Cicilan 6 kali (uang muka Rp1.000.000)', 1000000, 6])
@@ -129,23 +138,43 @@ const sampleQs = [
 ]
 for (const [body, opts, ci] of sampleQs) await q('INSERT INTO questions (id, bank_id, body, options, correct_idx) VALUES (?,?,?,?,?)', [uid(), bankId, body, JSON.stringify(opts), ci])
 await q('INSERT INTO exams (id, title, bank_id, program_id, open_at, close_at, duration_min, question_count) VALUES (?,?,?,NULL,?,?,?,?)', [uid(), 'Ujian tulis seleksi (contoh)', bankId, at(0), at(14), 30, 5])
+await importBankSoal() // 100 soal hospitality dan TPA, siap dipakai untuk ujian seleksi
 let n = 0
 const sec = (type, content) => ({ id: `sec-${++n}`, type, visible: true, content })
 const sections = [
-  sec('hero', { title: 'Belajar perhotelan langsung dari ruang praktiknya.', subtitle: 'Pelatihan kerja di Cimahi untuk front office, housekeeping, layanan restoran, dan tata boga. Sertifikat diterbitkan sistem dan bisa dicek keasliannya oleh siapa saja.', ctaLabel: 'Lihat program', ctaHref: '#program', secondaryLabel: 'Cek sertifikat', secondaryHref: '/verifikasi' }),
-  sec('stats', { note: 'Dihitung langsung dari data sistem.' }),
+  sec('hero', { title: 'Siap kerja, siap mendunia', highlight: 'Room Division & Food and Beverage', subtitle: 'Pelatihan kerja 1 tahun di LPK Cimahi Hotel Institute. Tingkatkan keterampilan dan buka peluang karier di hotel, resort, restoran, dan kapal pesiar.', ctaLabel: 'Daftar sekarang', ctaHref: '/daftar', secondaryLabel: 'Lihat program', secondaryHref: '#program' }),
+  sec('marquee', { items: ['Front Office', 'Housekeeping', 'Food & Beverage Service', 'Magang Hotel Bintang 5', 'Kerja di Resort, Hotel, Kapal Pesiar', 'Bahasa Asing', 'Personal Branding', 'Mock Up Room'].map((text) => ({ text })) }),
+  sec('about', { tagline: 'Shaping Global Hospitality', title: 'LPK Cimahi Hotel Institute', body: 'Lembaga pelatihan kerja bidang perhotelan yang menyiapkan tenaga kerja siap pakai untuk hotel, resort, restoran, dan kapal pesiar. Program pelatihan kerja 1 tahun di bidang Room Division dan Food & Beverage memadukan pembelajaran di kelas, praktik di ruang simulasi, dan magang di industri.',
+    items: ['Magang di hotel bintang 5', 'Penempatan kerja di resort, hotel, dan kapal pesiar', 'Pembekalan bahasa asing dan personal branding', 'Fasilitas mock up room, Room Division, dan Food Service', 'Biaya terjangkau dan bisa diangsur', 'Uang saku ketika magang'].map((text) => ({ text })) }),
   sec('programs', { title: 'Program pelatihan', limit: 4 }),
+  sec('stats', { note: 'Dihitung langsung dari data sistem.' }),
+  sec('organization', { title: 'Struktur organisasi', subtitle: 'Pengelola LPK Cimahi Hotel Institute.', items: [
+    { position: 'Ketua LPK', name: site.ketuaName, imageId: '' }, ...['Kepala Akademik', 'Bagian Pendaftaran', 'Bagian Keuangan', 'Koordinator Instruktur'].map((position) => ({ position, name: '', imageId: '' })) ] }),
+  sec('gallery', { title: 'Kegiatan peserta', subtitle: 'Peserta berlatih langsung di ruang praktik Room Division dan Food & Beverage, lengkap dengan seragam dan standar layanan hotel.', items: [
+    { src: '/landing/tim-rd-fb.jpg', imageId: '', caption: 'Peserta Room Division dan Food & Beverage', tag: 'Cimahi Hotel Institute' },
+    { src: '/landing/peserta-putra.jpg', imageId: '', caption: 'Grooming dan personal branding', tag: 'Pembekalan' },
+    { src: '/landing/fb-service.jpg', imageId: '', caption: 'Praktik layanan minuman dan hidangan', tag: 'Food & Beverage' },
+    { src: '/landing/siap-mendunia.jpg', imageId: '', caption: 'Siap berkarier di hotel, resort, dan kapal pesiar', tag: 'Karier' },
+    { src: '/landing/peserta-putri.jpg', imageId: '', caption: 'Pelayanan tamu dan front office', tag: 'Room Division' },
+    { src: '/landing/rd-housekeeping.jpg', imageId: '', caption: 'Praktik housekeeping dan penataan linen', tag: 'Room Division' } ] }),
   sec('upcoming_batches', { title: 'Angkatan yang sedang dibuka', limit: 4 }),
   sec('benefits', { title: 'Cara kami melatih', items: [
     { title: 'Praktik di ruang simulasi', body: 'Sebagian besar jam pelatihan dipakai untuk praktik, bukan ceramah.' },
     { title: 'Penilaian terbuka', body: 'Bobot nilai, batas lulus, dan syarat kehadiran ditetapkan per program dan bisa dilihat peserta.' },
-    { title: 'Sertifikat dengan kode verifikasi', body: 'Setiap sertifikat memuat kode yang bisa dicek perusahaan atau pemberi kerja.' } ] }),
+    { title: 'Status peserta bisa dicek', body: 'Perusahaan atau pemberi kerja dapat mengecek status peserta dengan NIP (Nomor Induk Peserta).' } ] }),
   sec('faq', { title: 'Pertanyaan yang sering diajukan', items: [
     { q: 'Bagaimana cara membayar?', a: 'Transfer ke rekening yang tertera di tagihan, lalu unggah bukti. Kode unik tiga digit membantu kami mencocokkan pembayaran.' },
     { q: 'Berapa lama batas pembayaran?', a: 'Default 48 jam sejak mendaftar. Setelah itu pendaftaran kedaluwarsa dan kuota dilepas.' },
-    { q: 'Kapan sertifikat terbit?', a: 'Setelah Akademik memvalidasi nilai dan Anda dinyatakan lulus.' } ] }),
+    { q: 'Kapan saya dinyatakan lulus?', a: 'Setelah Akademik memvalidasi nilai Anda. Status kelulusan bisa dicek di halaman Cek status peserta dengan NIP.' } ] }),
+  sec('location', { title: 'Lokasi', subtitle: 'Kegiatan pelatihan berlangsung di Area Kampus Politeknik TEDC Bandung.', mapQuery: 'Politeknik TEDC Bandung' }),
+  sec('social', { title: 'Media sosial', subtitle: 'Ikuti kegiatan peserta dan informasi pendaftaran terbaru.', items: [
+    { platform: 'instagram', handle: '@cimahihotelinstitute', url: 'https://www.instagram.com/cimahihotelinstitute/' },
+    { platform: 'tiktok', handle: '@cimahihotelinstitute', url: 'https://www.tiktok.com/@cimahihotelinstitute' },
+    { platform: 'youtube', handle: '@cimahihotelinstitute', url: 'https://www.youtube.com/@cimahihotelinstitute' },
+    { platform: 'website', handle: site.website, url: `https://${site.website}` },
+    { platform: 'email', handle: site.email, url: `mailto:${site.email}` } ] }),
   sec('cta', { title: 'Siap mulai angkatan berikutnya?', body: 'Buat akun, pilih angkatan, dan terima tagihan dalam beberapa menit.', label: 'Daftar sekarang', href: '/daftar' }),
-  sec('contact', { title: 'Hubungi kami' }),
+  { ...sec('contact', { title: 'Hubungi kami' }), visible: false }, // digantikan Lokasi dan Media sosial
 ]
 const rev = uid()
 await q("INSERT INTO settings (k, v) VALUES ('site', ?), ('draft_sections', ?), ('published_revision', ?)", [JSON.stringify(site), JSON.stringify(sections), rev])

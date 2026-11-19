@@ -40,6 +40,7 @@ try {
   await conn.query('DELETE FROM notifications')
   await conn.query(`DELETE FROM submissions WHERE registration_id IN ${regs}`)
   await conn.query(`DELETE FROM attendances WHERE registration_id IN ${regs}`)
+  await conn.query(`DELETE FROM subject_grades WHERE registration_id IN ${regs}`)
   await conn.query(`DELETE FROM grades WHERE registration_id IN ${regs}`)
   await conn.query('DELETE FROM certificates')
   await conn.query('DELETE FROM certificate_sequences')
