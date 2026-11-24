@@ -211,7 +211,7 @@ export const actions = {
       const s = await getSettings(c)
       // Sama dengan pilihan paket oleh peserta: biaya program + biaya tambahan, dikurangi biaya pendaftaran yang sudah dibayar.
       // Angkatan bebas biaya pendaftaran tidak punya potongan: biaya registrasi tetap penuh.
-      const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND (program_id IS NULL OR program_id = ?)', [r.program_id])
+      const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [r.program_id, r.user_id])
       const [{ credit }] = await cq(c, "SELECT COALESCE(SUM(amount_paid), 0) credit FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified'", [r.id])
       const total = Math.max(0, Number(p.price) + Number(extra) - Number(credit))
       if (total <= 0) fail('Tidak ada biaya registrasi yang perlu dijadwalkan.')

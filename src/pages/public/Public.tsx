@@ -1,6 +1,7 @@
 import { IconChevronDown, IconMenu2, IconX } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, Outlet, useParams, useLocation } from 'react-router-dom'
+import { InstallButton } from '../../components/InstallApp'
 import { SectionView } from '../../components/SectionRenderer'
 import { Logo, Reveal, dateID, rupiah } from '../../components/ui'
 import { seatsTaken, useStore } from '../../lib/store'
@@ -129,6 +130,7 @@ export function PublicLayout() {
               {top.map((m) => <a key={m.id} href={href(m.id)} className={navLink}>{m.label}</a>)}
               <Link to="/cek-status" className={navLink}>Cek status</Link>
             </div>
+            <InstallButton className={`${dark ? 'lp-outline' : 'btn-ghost'} hidden sm:inline-flex`} label="Install" />
             {user ? (
               <Link to={user.role === 'peserta' ? '/app' : '/admin'} className={`${dark ? 'lp-pill' : 'btn-primary'} hidden sm:inline-flex`}>Buka dashboard</Link>
             ) : (
@@ -153,6 +155,7 @@ export function PublicLayout() {
               <Link to="/chi-today" onClick={() => setOpen(false)} className={`${navLink} block ${chiActive ? (dark ? '!text-white' : '!text-ink') : ''}`}>CHI Today</Link>
               {top.map((m) => <a key={m.id} href={href(m.id)} onClick={() => setOpen(false)} className={`${navLink} block`}>{m.label}</a>)}
               <Link to="/cek-status" className={`${navLink} block`}>Cek status peserta</Link>
+              <InstallButton className={`${dark ? 'lp-outline' : 'btn-ghost'} mt-2 w-full`} label="Install aplikasi CHI" />
               <div className="flex gap-2 pt-3">
                 {user
                   ? <Link to={user.role === 'peserta' ? '/app' : '/admin'} className={`${dark ? 'lp-pill' : 'btn-primary'} flex-1`}>Buka dashboard</Link>

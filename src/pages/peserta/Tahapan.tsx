@@ -87,7 +87,7 @@ function Reenroll({ reg }: { reg: Registration }) {
   const prog = s.programs.find((p) => p.id === reg.programId)
   const credit = s.payments.filter((p) => p.registrationId === reg.id && p.kind === 'pendaftaran' && p.status === 'verified').reduce((t, p) => t + p.amountPaid, 0)
   const fullPrice = prog?.price ?? reg.priceSnapshot
-  const extras = s.feeItems.filter((x) => !x.programId || x.programId === reg.programId)
+  const extras = s.feeItems.filter((x) => x.userId ? x.userId === reg.userId : (!x.programId || x.programId === reg.programId))
   const total = Math.max(0, fullPrice + extras.reduce((t, x) => t + x.amount, 0) - credit)
   const plans = s.plans.filter((p) => !p.programId || p.programId === reg.programId)
   const insts = s.installments.filter((i) => i.registrationId === reg.id).sort((a, b) => a.seq - b.seq)

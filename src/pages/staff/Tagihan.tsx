@@ -112,7 +112,7 @@ export function RincianBayar() {
 
   // Dari apa total terdiri: biaya program + biaya tambahan - biaya pendaftaran (yang dicicil).
   const regFee = s.settings.regFee ?? 200000
-  const extras = s.feeItems.filter((x) => x.active && (!x.programId || x.programId === r.programId))
+  const extras = s.feeItems.filter((x) => x.active && (x.userId ? x.userId === r.userId : (!x.programId || x.programId === r.programId)))
   const price = prog?.price ?? r.priceSnapshot
   const credit = items[0]?.state === 'paid' ? (items[0].amount ?? 0) : 0
   const installTotal = s.installments.filter((i) => i.registrationId === r.id).reduce((t, i) => t + i.amount, 0)

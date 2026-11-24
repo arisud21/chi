@@ -5,6 +5,9 @@ import './index.css'
 import App from './App'
 import { refresh } from './lib/store'
 
+import { initPwa } from './lib/pwa'
+
+initPwa()
 refresh()
 
 createRoot(document.getElementById('root')!).render(

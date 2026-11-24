@@ -535,7 +535,7 @@ export const admissionActions = {
       const [p] = await cq(c, 'SELECT price FROM programs WHERE id = ?', [r.program_id])
       const s = await getSettings(c)
       // Total = biaya program + biaya tambahan aktif, dikurangi biaya pendaftaran yang sudah dikonfirmasi.
-      const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND (program_id IS NULL OR program_id = ?)', [r.program_id])
+      const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [r.program_id, r.user_id])
       const [{ credit }] = await cq(c, "SELECT COALESCE(SUM(amount_paid), 0) credit FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified'", [r.id])
       const total = Math.max(0, Number(p.price) + Number(extra) - Number(credit))
       if (total <= 0) fail('Biaya pelatihan sudah tercukupi oleh biaya pendaftaran. Hubungi bagian keuangan.')
@@ -824,10 +824,12 @@ export const admissionActions = {
     roles: FINANCE,
     fn: (ctx, x) => tx(async (c) => {
       const name = str(x.name, 100)
-      if (x.programId) { const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ?', [x.programId]); if (!p) fail('Program tidak ditemukan.') }
-      const vals = [name, num(x.amount, 0, 1_000_000_000), x.programId || null, x.active === false ? 0 : 1]
-      if (x.id) await cq(c, 'UPDATE fee_items SET name=?, amount=?, program_id=?, is_active=? WHERE id = ?', [...vals, x.id])
-      else await cq(c, 'INSERT INTO fee_items (name, amount, program_id, is_active, id) VALUES (?,?,?,?,?)', [...vals, uid()])
+      // Sasaran: semua program, satu program, atau satu peserta didik (peserta didik mengabaikan program).
+      if (x.userId) { const [u] = await cq(c, "SELECT id FROM users WHERE id = ? AND role = 'peserta'", [x.userId]); if (!u) fail('Peserta didik tidak ditemukan.') }
+      else if (x.programId) { const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ?', [x.programId]); if (!p) fail('Program tidak ditemukan.') }
+      const vals = [name, num(x.amount, 0, 1_000_000_000), x.userId ? null : (x.programId || null), x.userId || null, x.active === false ? 0 : 1]
+      if (x.id) await cq(c, 'UPDATE fee_items SET name=?, amount=?, program_id=?, user_id=?, is_active=? WHERE id = ?', [...vals, x.id])
+      else await cq(c, 'INSERT INTO fee_items (name, amount, program_id, user_id, is_active, id) VALUES (?,?,?,?,?,?)', [...vals, uid()])
       await audit(c, ctx.user.id, 'biaya-tambahan.simpan', 'fee_items', `${name}: ${vals[1]}`)
     }),
   },

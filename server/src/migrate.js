@@ -2,6 +2,8 @@
 import { q } from './lib.js'
 
 const COLUMNS = [
+  // Biaya tambahan bisa ditetapkan untuk satu peserta didik (user_id terisi) selain per program.
+  ['fee_items', 'user_id', 'CHAR(36) NULL'],
   // Jadwal per mata pelajaran di tiap angkatan: instruktur, hari, jam, dan ruang kelasnya masing-masing.
   ['batch_subjects', 'instructor_id', 'CHAR(36) NULL'],
   ['batch_subjects', 'schedule_days', "VARCHAR(40) NOT NULL DEFAULT ''"],

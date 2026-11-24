@@ -344,7 +344,7 @@ function TotalBiaya() {
       <Table head={['Program', 'Biaya pelatihan (Rp)', 'Biaya tambahan', 'Total keseluruhan', 'Dicicil setelah pendaftaran', '']}>
         {programs.map((p) => {
           const price = prices[p.id] ?? p.price
-          const extra = s.feeItems.filter((x) => x.active && (!x.programId || x.programId === p.id)).reduce((t, x) => t + x.amount, 0)
+          const extra = s.feeItems.filter((x) => x.active && !x.userId && (!x.programId || x.programId === p.id)).reduce((t, x) => t + x.amount, 0)
           const dirty = prices[p.id] != null && prices[p.id] !== p.price
           return (
             <tr key={p.id}>
@@ -366,23 +366,31 @@ function TotalBiaya() {
 function BiayaTambahan() {
   const s = useStore((x) => x)
   const act = useAct()
-  const [item, setItem] = useState<{ id?: string; name: string; amount: number; programId: string; active: boolean } | null>(null)
+  const [item, setItem] = useState<{ id?: string; name: string; amount: number; programId: string; userId: string; active: boolean } | null>(null)
+  const [target, setTarget] = useState<'all' | 'program' | 'user'>('all')
+  const [find, setFind] = useState('')
+  const students = s.users.filter((u) => u.role === 'peserta').sort((a, b) => a.name.localeCompare(b.name))
+  const label = (u: { name: string; email: string }) => `${u.name} (${u.email})`
+  const open = (x: NonNullable<typeof item>) => {
+    const u = s.users.find((y) => y.id === x.userId)
+    setTarget(x.userId ? 'user' : x.programId ? 'program' : 'all'); setFind(u ? label(u) : ''); setItem(x)
+  }
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-xl text-sm text-muted">Biaya seperti jas almamater ditambahkan ke total yang dicicil peserta. Setiap pembayaran, termasuk biaya pendaftaran, mengurangi sisa total.</p>
-        <button className="btn-primary" onClick={() => setItem({ name: '', amount: 0, programId: '', active: true })}><IconPlus size={18} />Biaya baru</button>
+        <button className="btn-primary" onClick={() => open({ name: '', amount: 0, programId: '', userId: '', active: true })}><IconPlus size={18} />Biaya baru</button>
       </div>
-      {s.feeItems.length === 0 ? <div className="card"><Empty title="Belum ada biaya tambahan" body="Contoh: jas almamater, seragam, atau modul. Biaya aktif langsung masuk ke total peserta yang memilih paket sesudahnya." action={<button className="btn-primary" onClick={() => setItem({ name: 'Jas almamater', amount: 0, programId: '', active: true })}>Tambah jas almamater</button>} /></div> : (
+      {s.feeItems.length === 0 ? <div className="card"><Empty title="Belum ada biaya tambahan" body="Contoh: jas almamater, seragam, atau modul. Biaya aktif langsung masuk ke total peserta yang memilih paket sesudahnya." action={<button className="btn-primary" onClick={() => open({ name: 'Jas almamater', amount: 0, programId: '', userId: '', active: true })}>Tambah jas almamater</button>} /></div> : (
         <Table head={['Biaya', 'Berlaku untuk', 'Nominal', 'Status', '']}>
           {s.feeItems.map((x) => (
             <tr key={x.id}>
               <td className="font-semibold">{x.name}</td>
-              <td>{x.programId ? s.programs.find((p) => p.id === x.programId)?.title : 'Semua program'}</td>
+              <td>{x.userId ? <>Peserta: {s.users.find((u) => u.id === x.userId)?.name ?? 'tidak ditemukan'}</> : x.programId ? s.programs.find((p) => p.id === x.programId)?.title : 'Semua program'}</td>
               <td className="tabular-nums">{rupiah(x.amount)}</td>
               <td>{x.active ? <span className="text-sm font-medium text-emerald-700">Aktif</span> : <span className="text-sm text-muted">Nonaktif</span>}</td>
               <td className="whitespace-nowrap text-right">
-                <button className="btn-ghost !min-h-10" onClick={() => setItem(x)} aria-label={`Ubah ${x.name}`}><IconPencil size={16} /></button>{' '}
+                <button className="btn-ghost !min-h-10" onClick={() => open(x)} aria-label={`Ubah ${x.name}`}><IconPencil size={16} /></button>{' '}
                 <button className="btn-ghost !min-h-10" onClick={async () => await ask(`Hapus biaya "${x.name}"? Jadwal cicilan yang sudah dibuat tidak berubah.`) && act(deleteFeeItem(x.id), 'Biaya dihapus.')} aria-label={`Hapus ${x.name}`}><IconTrash size={16} /></button>
               </td>
             </tr>
@@ -393,7 +401,27 @@ function BiayaTambahan() {
         {item && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(saveFeeItem(item), 'Biaya disimpan.', () => setItem(null)) }}>
           <Field label="Nama biaya"><input className="input" required value={item.name} onChange={(e) => setItem({ ...item, name: e.target.value })} /></Field>
           <Field label="Nominal (Rp)"><MoneyInput required value={item.amount} onValue={(n) => setItem({ ...item, amount: n })} /></Field>
-          <Field label="Berlaku untuk"><select className="input" value={item.programId} onChange={(e) => setItem({ ...item, programId: e.target.value })}><option value="">Semua program</option>{s.programs.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
+          <Field label="Ditetapkan berdasarkan">
+            <select className="input" value={target} onChange={(e) => { const t = e.target.value as typeof target; setTarget(t); setItem({ ...item, programId: '', userId: '' }) }}>
+              <option value="all">Semua program</option>
+              <option value="program">Program tertentu</option>
+              <option value="user">Nama peserta didik</option>
+            </select>
+          </Field>
+          {target === 'program' && <Field label="Program"><select className="input" required value={item.programId} onChange={(e) => setItem({ ...item, programId: e.target.value })}><option value="">Pilih program</option>{s.programs.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>}
+          {target === 'user' && <>
+            <Field label="Peserta didik">
+              <input className="input" list="fee-students" placeholder="Ketik nama peserta didik" required value={find} onChange={(e) => {
+                const v = e.target.value
+                const same = students.filter((x) => x.name.toLowerCase() === v.toLowerCase())
+                const u = students.find((x) => label(x) === v) ?? (same.length === 1 ? same[0] : undefined)
+                setFind(v); setItem({ ...item, userId: u?.id ?? '' })
+                e.target.setCustomValidity(u ? '' : 'Pilih peserta didik dari daftar.')
+              }} />
+              <datalist id="fee-students">{students.map((u) => <option key={u.id} value={label(u)} />)}</datalist>
+            </Field>
+            <p className="text-xs text-muted">Biaya ini hanya masuk ke total peserta tersebut, apa pun programnya.</p>
+          </>}
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-brand-600" checked={item.active} onChange={(e) => setItem({ ...item, active: e.target.checked })} />Aktif (masuk ke total peserta)</label>
           <button className="btn-primary w-full">Simpan</button>
         </form>}
@@ -408,7 +436,7 @@ function PaketCicilan() {
   const [plan, setPlan] = useState<(Omit<PaymentPlan, 'id'> & { id?: string; programIds: string[] }) | null>(null)
   const programs = s.programs.filter((p) => !p.archived)
   const sample = programs[0]
-  const sampleTotal = sample ? Math.max(0, sample.price + s.feeItems.filter((x) => x.active && (!x.programId || x.programId === sample.id)).reduce((t, x) => t + x.amount, 0) - (s.settings.regFee ?? 0)) : 0
+  const sampleTotal = sample ? Math.max(0, sample.price + s.feeItems.filter((x) => x.active && !x.userId && (!x.programId || x.programId === sample.id)).reduce((t, x) => t + x.amount, 0) - (s.settings.regFee ?? 0)) : 0
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

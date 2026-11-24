@@ -306,7 +306,7 @@ export interface SiteSettings {
 
 export type DocKind = 'ktp' | 'ijazah' | 'foto' | 'kk' | 'buta_warna'
 export interface Doc { id: string; userId: string; kind: DocKind; fileId: string; createdAt: string }
-export interface FeeItem { id: string; name: string; amount: number; programId: string; active: boolean }
+export interface FeeItem { id: string; name: string; amount: number; programId: string; userId: string; active: boolean }
 export interface Installment { id: string; registrationId: string; seq: number; amount: number; paidAmount: number; dueDate: string; status: 'unpaid' | 'partial' | 'submitted' | 'paid' }
 export interface PaymentPlan { id: string; programId: string; name: string; downPayment: number; installments: number; active: boolean }
 export interface Exam {

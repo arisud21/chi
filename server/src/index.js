@@ -609,7 +609,13 @@ if (!IS_PROD) {
 } else {
   const dist = path.join(frontendRoot, 'dist')
   if (!fs.existsSync(dist)) throw new Error('Folder dist belum ada. Jalankan "npm run build" di folder chi-sim terlebih dahulu.')
-  app.use(express.static(dist))
+  app.use(express.static(dist, {
+    setHeaders: (res, file) => {
+      // Service worker dan manifest harus selalu segar agar pembaruan aplikasi sampai ke peserta.
+      if (/[\\/](sw\.js|manifest\.webmanifest)$/.test(file)) res.setHeader('Cache-Control', 'no-cache')
+      if (file.endsWith('.webmanifest')) res.setHeader('Content-Type', 'application/manifest+json')
+    },
+  }))
   app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')))
 }
 

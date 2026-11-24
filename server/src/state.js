@@ -69,7 +69,7 @@ const mapExam = (e) => ({
   id: e.id, title: e.title, bankId: e.bank_id, programId: e.program_id ?? '', openAt: iso(e.open_at), closeAt: iso(e.close_at), durationMin: e.duration_min,
   questionCount: e.question_count, active: bool(e.is_active),
 })
-const mapFeeItem = (x) => ({ id: x.id, name: x.name, amount: Number(x.amount), programId: x.program_id ?? '', active: bool(x.is_active) })
+const mapFeeItem = (x) => ({ id: x.id, name: x.name, amount: Number(x.amount), programId: x.program_id ?? '', userId: x.user_id ?? '', active: bool(x.is_active) })
 const mapNotif = (n) => ({ id: n.id, title: n.title, body: n.body, link: n.link ?? '', read: !!n.read_at, createdAt: iso(n.created_at) })
 const EXAM_ROLES = ['super_admin', 'admin_pendaftaran']
 const mapDoc = (d) => ({ id: d.id, userId: d.user_id, kind: d.kind, fileId: d.file_id, createdAt: iso(d.created_at) })
@@ -177,7 +177,7 @@ export async function buildState(user, devMode, impersonator = null) {
     s.installments = (await q('SELECT * FROM installments WHERE registration_id IN (?) ORDER BY seq', [inList])).map(mapInst)
     s.documents = (await q('SELECT * FROM registration_documents WHERE user_id = ?', [me])).map(mapDoc)
     s.plans = (await q('SELECT * FROM payment_plans WHERE is_active = 1')).map(mapPlan)
-    s.feeItems = (await q('SELECT * FROM fee_items WHERE is_active = 1')).map(mapFeeItem)
+    s.feeItems = (await q('SELECT * FROM fee_items WHERE is_active = 1 AND (user_id IS NULL OR user_id = ?)', [me])).map(mapFeeItem)
     s.notifications = (await q('SELECT * FROM notifications WHERE user_id = ? AND (read_at IS NULL OR read_at >= ?) ORDER BY created_at DESC LIMIT 50', [me, notifCutoff()])).map(mapNotif)
     // Ujian: tanpa token, tanpa soal, tanpa nilai. Nilai hanya dibaca staf.
     const ex = await q('SELECT e.* FROM exams e WHERE e.is_active = 1')

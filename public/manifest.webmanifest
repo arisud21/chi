@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "Cimahi Hotel Institute",
+  "short_name": "CHI",
+  "description": "Sistem informasi Cimahi Hotel Institute: pendaftaran, pembelajaran, nilai, dan pembayaran peserta didik.",
+  "lang": "id",
+  "dir": "ltr",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#395886",
+  "categories": ["education", "business"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Masuk", "short_name": "Masuk", "url": "/masuk", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Cek status peserta", "short_name": "Cek status", "url": "/cek-status", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

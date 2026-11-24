@@ -420,6 +420,7 @@ CREATE TABLE IF NOT EXISTS fee_items (
   name VARCHAR(100) NOT NULL,
   amount BIGINT NOT NULL,
   program_id CHAR(36) NULL,
+  user_id CHAR(36) NULL, -- terisi = hanya untuk peserta didik ini (program_id diabaikan)
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (program_id) REFERENCES programs(id)
