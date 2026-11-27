@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS programs (
   nip_code TINYINT NULL -- digit program di NIP, misalnya 1 untuk FB dan 2 untuk RD
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Kurikulum pelatihan: satu pelatihan bisa punya beberapa kurikulum, sehingga mata pelajaran tiap angkatan dapat berbeda.
+CREATE TABLE IF NOT EXISTS curricula (
+  id CHAR(36) PRIMARY KEY,
+  program_id CHAR(36) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(255) NOT NULL DEFAULT '',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (program_id, name),
+  FOREIGN KEY (program_id) REFERENCES programs(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS batches (
   id CHAR(36) PRIMARY KEY,
   program_id CHAR(36) NOT NULL,
@@ -64,6 +76,7 @@ CREATE TABLE IF NOT EXISTS batches (
   theory_weight INT NULL, -- bobot khusus angkatan dari instruktur wali; NULL = bobot default program
   practical_weight INT NULL,
   free_reg_fee TINYINT(1) NOT NULL DEFAULT 0, -- angkatan bebas biaya pendaftaran (dianggap lunas); biaya registrasi tetap ditagih
+  curriculum_id CHAR(36) NULL, -- kurikulum angkatan: jadwalnya hanya memakai mata pelajaran kurikulum ini dan kelas gabungan
   FOREIGN KEY (program_id) REFERENCES programs(id),
   FOREIGN KEY (instructor_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -130,10 +143,11 @@ CREATE TABLE IF NOT EXISTS payments (
   FOREIGN KEY (proof_file_id) REFERENCES files(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Bank mata pelajaran per pelatihan (program). Dikelola Akademik.
+-- Bank mata pelajaran per kurikulum pelatihan. Dikelola Akademik.
 CREATE TABLE IF NOT EXISTS subjects (
   id CHAR(36) PRIMARY KEY,
   program_id CHAR(36) NULL, -- NULL = kelas gabungan, berlaku untuk semua pelatihan
+  curriculum_id CHAR(36) NULL, -- kurikulum pelatihan; NULL untuk kelas gabungan
   code VARCHAR(12) NULL,
   name VARCHAR(120) NOT NULL,
   kind ENUM('teori','praktik','teori_praktik') NOT NULL,
@@ -142,8 +156,9 @@ CREATE TABLE IF NOT EXISTS subjects (
   meetings INT NULL,
   description VARCHAR(255) NOT NULL DEFAULT '',
   is_active TINYINT(1) NOT NULL DEFAULT 1,
-  UNIQUE (program_id, name),
-  FOREIGN KEY (program_id) REFERENCES programs(id)
+  UNIQUE KEY uq_subject_curriculum (program_id, curriculum_id, name),
+  FOREIGN KEY (program_id) REFERENCES programs(id),
+  FOREIGN KEY (curriculum_id) REFERENCES curricula(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Mata pelajaran yang dipilih Akademik untuk satu angkatan, beserta jumlah pertemuannya.
@@ -427,6 +442,20 @@ CREATE TABLE IF NOT EXISTS fee_items (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Token ujian dipisah dari ujian: masa aktifnya dipilih admin saat token dibuat
+-- Potongan biaya per pendaftar, diberikan bagian keuangan: biaya pendaftaran, biaya pelatihan, atau satu biaya tambahan.
+CREATE TABLE IF NOT EXISTS registration_discounts (
+  id CHAR(36) PRIMARY KEY,
+  registration_id CHAR(36) NOT NULL,
+  target VARCHAR(50) NOT NULL, -- 'pendaftaran', 'pelatihan', atau id biaya tambahan (fee_items)
+  label VARCHAR(120) NOT NULL, -- nama biaya saat potongan diberikan
+  amount BIGINT NOT NULL,
+  reason VARCHAR(255) NOT NULL,
+  created_by CHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (registration_id, target),
+  FOREIGN KEY (registration_id) REFERENCES registrations(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS exam_tokens (
   id CHAR(36) PRIMARY KEY,
   exam_id CHAR(36) NOT NULL,

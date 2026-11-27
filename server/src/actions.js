@@ -1,12 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import bcrypt from 'bcryptjs'
-import { HttpError, UPLOAD_DIR, audit, cq, dt, fail, getSettings, mail, q, randomCode, tx, uid } from './lib.js'
+import { HttpError, MAX_AGE, UPLOAD_DIR, ageOn, audit, cq, dt, fail, getSettings, mail, q, randomCode, tx, uid } from './lib.js'
 import { newsActions } from './news.js'
 import { chiTodayActions } from './chiToday.js'
 import { placementActions } from './placement.js'
 import { kasActions } from './kas.js'
-import { MIN_REENROLL_DEFAULT, REG_FEE_DEFAULT, admissionActions, allocatePayment, buildSchedule, issueNip, notify, reenrollShortfall, recalcAttendancePct, syncFinal, validWeights, remainingTotal, sweepAdmissions, syncGraduation, unattendedSessions } from './admission.js'
+import { MIN_REENROLL_DEFAULT, REG_FEE_DEFAULT, admissionActions, allocatePayment, applyScheduleDelta, buildSchedule, discountsOf, regFeeDue, scheduleCredit, issueNip, notify, reenrollShortfall, recalcAttendancePct, syncFinal, validWeights, remainingTotal, sweepAdmissions, syncGraduation, unattendedSessions } from './admission.js'
 
 const ALL_STAFF = ['super_admin', 'admin_pendaftaran', 'admin_keuangan', 'akademik', 'instruktur']
 const CMS = ['super_admin', 'admin_pendaftaran']
@@ -197,6 +197,20 @@ export const actions = {
     }),
   },
 
+  /* ---------- keuangan: potongan biaya per pendaftar ---------- */
+  /**
+   * Beri atau ubah potongan untuk satu biaya pendaftar: 'pendaftaran', 'pelatihan', atau id biaya tambahan yang berlaku untuknya.
+   * Satu potongan per biaya. Jadwal cicilan yang sudah ada langsung disesuaikan.
+   */
+  saveDiscount: {
+    roles: ['super_admin', 'admin_keuangan'],
+    fn: (ctx, regId, x) => tx((c) => changeDiscount(c, ctx, regId, String(x?.target ?? ''), x ?? {})),
+  },
+  deleteDiscount: {
+    roles: ['super_admin', 'admin_keuangan'],
+    fn: (ctx, regId, target) => tx((c) => changeDiscount(c, ctx, regId, String(target ?? ''), null)),
+  },
+
   /* ---------- keuangan: peserta didik yang ditambahkan atau diimpor admin ---------- */
   /** Tetapkan paket pembayaran biaya registrasi (peserta impor tidak melewati tahap memilih paket sendiri). */
   setPlanAdmin: {
@@ -211,9 +225,9 @@ export const actions = {
       const s = await getSettings(c)
       // Sama dengan pilihan paket oleh peserta: biaya program + biaya tambahan, dikurangi biaya pendaftaran yang sudah dibayar.
       // Angkatan bebas biaya pendaftaran tidak punya potongan: biaya registrasi tetap penuh.
+      // Potongan yang diberikan keuangan ikut mengurangi total.
       const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [r.program_id, r.user_id])
-      const [{ credit }] = await cq(c, "SELECT COALESCE(SUM(amount_paid), 0) credit FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified'", [r.id])
-      const total = Math.max(0, Number(p.price) + Number(extra) - Number(credit))
+      const total = Math.max(0, Number(p.price) + Number(extra) - await scheduleCredit(c, r, s))
       if (total <= 0) fail('Tidak ada biaya registrasi yang perlu dijadwalkan.')
       const today = new Date().toISOString().slice(0, 10)
       const sched = buildSchedule(total, plan, s.reenrollDue || today, s.pelunasanDue || s.reenrollDue || today)
@@ -242,7 +256,8 @@ export const actions = {
         if (ok) fail('Biaya pendaftaran sudah tercatat lunas.')
         const [sched] = await cq(c, 'SELECT id FROM installments WHERE registration_id = ? LIMIT 1', [r.id])
         if (sched) fail('Paket biaya registrasi sudah ditetapkan tanpa potongan biaya pendaftaran. Catat biaya pendaftaran sebelum menetapkan paket, atau tetapkan ulang paketnya setelah ini.')
-        kind = 'pendaftaran'; due = Number(s.regFee ?? REG_FEE_DEFAULT)
+        kind = 'pendaftaran'; due = await regFeeDue(c, r, s)
+        if (due <= 0) fail('Biaya pendaftaran peserta ini sudah dihapus seluruhnya lewat potongan, jadi tidak perlu dicatat.')
       } else {
         const insts = await cq(c, 'SELECT * FROM installments WHERE registration_id = ? ORDER BY seq FOR UPDATE', [r.id])
         if (!insts.length) fail('Tetapkan paket pembayaran biaya registrasi dulu.')
@@ -291,12 +306,14 @@ export const actions = {
       const today = new Date(Date.now() + 7 * 3_600_000).toISOString().slice(0, 10)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(x?.transferDate ?? '') || x.transferDate > today) fail('Tanggal bayar tidak valid atau di masa depan.')
       const s = await getSettings(c)
+      const due = await regFeeDue(c, r, s)
+      if (due <= 0) fail('Biaya pendaftaran pendaftar ini sudah dihapus seluruhnya lewat potongan, jadi tidak perlu dicatat.')
       const id = uid()
       const receipt = `KWT-${new Date().toISOString().slice(0, 7).replace('-', '')}-${r.code.slice(-3)}-${id.slice(0, 4).toUpperCase()}`
       const note = str(x.note, 255, false) || 'Dicatat bagian keuangan'
       const [u] = await cq(c, 'SELECT name FROM users WHERE id = ?', [r.user_id])
       await cq(c, "INSERT INTO payments (id, registration_id, kind, installment_id, amount_due, amount_paid, payer_name, transfer_date, status, receipt_no, verified_by, note) VALUES (?,?,'pendaftaran',NULL,?,?,?,?,'verified',?,?,?)",
-        [id, r.id, Number(s.regFee ?? REG_FEE_DEFAULT), amount, str(x.payerName, 120, false) || u?.name || 'Pendaftar', x.transferDate, receipt, ctx.user.id, note])
+        [id, r.id, due, amount, str(x.payerName, 120, false) || u?.name || 'Pendaftar', x.transferDate, receipt, ctx.user.id, note])
       const paid = 'Rp' + amount.toLocaleString('id-ID')
       if (r.stage === 'bayar_daftar') {
         await cq(c, "UPDATE registrations SET stage = 'ujian' WHERE id = ?", [r.id])
@@ -436,55 +453,121 @@ export const actions = {
       if (!b.startDate || !b.endDate || b.endDate < b.startDate) fail('Tanggal selesai sebelum tanggal mulai.')
       if (!['draft', 'open', 'running', 'finished', 'cancelled'].includes(b.status)) fail('Status tidak valid.')
       // Instruktur, lokasi, dan jadwal diatur Akademik lewat Jadwal pembelajaran (saveJadwal).
-      const vals = [b.programId, str(b.code, 40), b.startDate, b.endDate, num(b.quota, 1), b.status, digit(b.angkatan, 'Angkatan'), b.freeRegFee ? 1 : 0]
-      const [ex] = await cq(c, 'SELECT id FROM batches WHERE id = ?', [b.id])
-      if (ex) await cq(c, 'UPDATE batches SET program_id=?, code=?, start_date=?, end_date=?, quota=?, status=?, angkatan=?, free_reg_fee=? WHERE id = ?', [...vals, b.id])
-      else await cq(c, 'INSERT INTO batches (program_id, code, start_date, end_date, quota, status, angkatan, free_reg_fee, id) VALUES (?,?,?,?,?,?,?,?,?)', [...vals, b.id || uid()])
+      const [ex] = await cq(c, 'SELECT id, curriculum_id FROM batches WHERE id = ? FOR UPDATE', [b.id ?? ''])
+      const cur = await batchCurriculum(c, b.programId, b.curriculumId, ex)
+      const vals = [b.programId, str(b.code, 40), b.startDate, b.endDate, num(b.quota, 1), b.status, digit(b.angkatan, 'Angkatan'), b.freeRegFee ? 1 : 0, cur]
+      if (ex) await cq(c, 'UPDATE batches SET program_id=?, code=?, start_date=?, end_date=?, quota=?, status=?, angkatan=?, free_reg_fee=?, curriculum_id=? WHERE id = ?', [...vals, b.id])
+      else await cq(c, 'INSERT INTO batches (program_id, code, start_date, end_date, quota, status, angkatan, free_reg_fee, curriculum_id, id) VALUES (?,?,?,?,?,?,?,?,?,?)', [...vals, b.id || uid()])
       await audit(c, ctx.user.id, ex ? 'batch.ubah' : 'batch.buat', 'batches', b.code)
     }),
   },
 
   /* ---------- pembelajaran ---------- */
   /* Akademik menetapkan jadwal angkatan; instruktur mengisi pertemuan dan materinya. */
-  /* Bank mata pelajaran per pelatihan (Akademik). */
+  /** Akademik menetapkan kurikulum yang dipakai satu angkatan (menu Jadwal pembelajaran). */
+  setBatchCurriculum: {
+    roles: ['akademik', 'super_admin'],
+    fn: (ctx, batchId, curriculumId) => tx(async (c) => {
+      const [b] = await cq(c, 'SELECT id, code, program_id, curriculum_id FROM batches WHERE id = ? FOR UPDATE', [batchId ?? ''])
+      if (!b) fail('Angkatan tidak ditemukan.')
+      if (!curriculumId) fail('Pilih kurikulum.')
+      const cur = await batchCurriculum(c, b.program_id, curriculumId, b, true)
+      await cq(c, 'UPDATE batches SET curriculum_id = ? WHERE id = ?', [cur, b.id])
+      const [{ name }] = await cq(c, 'SELECT name FROM curricula WHERE id = ?', [cur])
+      await audit(c, ctx.user.id, 'batch.kurikulum', 'batches', `${b.code}: ${name}`)
+    }),
+  },
+
+  /* Kurikulum pelatihan: wadah mata pelajaran. Satu pelatihan bisa punya beberapa kurikulum; tiap angkatan memakai satu. */
+  saveCurriculum: {
+    roles: ['akademik', 'super_admin'],
+    fn: (ctx, x) => tx(async (c) => {
+      const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [x.programId ?? ''])
+      if (!p) fail('Pilih pelatihan.')
+      const name = str(x.name, 120)
+      const [ex] = x.id ? await cq(c, 'SELECT * FROM curricula WHERE id = ? FOR UPDATE', [x.id]) : []
+      if (ex && ex.program_id !== p.id) fail('Kurikulum tidak bisa dipindah ke pelatihan lain.')
+      const [dup] = await cq(c, 'SELECT id FROM curricula WHERE program_id = ? AND LOWER(name) = LOWER(?) AND id <> ?', [p.id, name, x.id ?? ''])
+      if (dup) fail('Kurikulum dengan nama itu sudah ada di pelatihan ini.')
+      const vals = [name, str(x.description, 255, false), x.active === false ? 0 : 1]
+      const id = ex ? ex.id : x.id || uid()
+      if (ex) await cq(c, 'UPDATE curricula SET name = ?, description = ?, is_active = ? WHERE id = ?', [...vals, id])
+      else {
+        await cq(c, 'INSERT INTO curricula (name, description, is_active, id, program_id) VALUES (?,?,?,?,?)', [...vals, id, p.id])
+        // Kurikulum baru boleh disalin dari kurikulum lain di pelatihan yang sama, lalu diubah seperlunya.
+        if (x.copyFrom) {
+          const [src] = await cq(c, 'SELECT id FROM curricula WHERE id = ? AND program_id = ?', [x.copyFrom, p.id])
+          if (!src) fail('Kurikulum sumber tidak ditemukan di pelatihan ini.')
+          await cq(c, `INSERT INTO subjects (id, program_id, curriculum_id, code, name, kind, hours, hours_per_meeting, meetings, description, is_active)
+            SELECT UUID(), program_id, ?, code, name, kind, hours, hours_per_meeting, meetings, description, is_active FROM subjects WHERE curriculum_id = ?`, [id, src.id])
+        }
+      }
+      await audit(c, ctx.user.id, ex ? 'kurikulum.ubah' : 'kurikulum.tambah', 'curricula', name)
+      return { id }
+    }),
+  },
+  /** Hapus kurikulum beserta mata pelajarannya. Hanya bila belum dipakai angkatan mana pun. */
+  deleteCurriculum: {
+    roles: ['akademik', 'super_admin'],
+    fn: (ctx, id) => tx(async (c) => {
+      const [cur] = await cq(c, 'SELECT * FROM curricula WHERE id = ? FOR UPDATE', [id ?? ''])
+      if (!cur) fail('Kurikulum tidak ditemukan.')
+      const used = await cq(c, 'SELECT code FROM batches WHERE curriculum_id = ?', [cur.id])
+      if (used.length) fail(`Kurikulum ini dipakai angkatan ${used.map((b) => b.code).join(', ')}. Ganti kurikulum angkatan itu dulu, atau nonaktifkan kurikulum ini.`)
+      const [{ n }] = await cq(c, `SELECT (SELECT COUNT(*) FROM batch_subjects bs JOIN subjects sj ON sj.id = bs.subject_id WHERE sj.curriculum_id = ?)
+        + (SELECT COUNT(*) FROM class_sessions cs JOIN subjects sj ON sj.id = cs.subject_id WHERE sj.curriculum_id = ?) n`, [cur.id, cur.id])
+      if (Number(n)) fail('Mata pelajaran kurikulum ini sudah dipakai di jadwal, jadi kurikulumnya tidak bisa dihapus. Nonaktifkan saja.')
+      await cq(c, 'DELETE FROM subjects WHERE curriculum_id = ?', [cur.id])
+      await cq(c, 'DELETE FROM curricula WHERE id = ?', [cur.id])
+      await audit(c, ctx.user.id, 'kurikulum.hapus', 'curricula', cur.name)
+    }),
+  },
+
+  /* Bank mata pelajaran per kurikulum pelatihan (Akademik). */
   saveSubject: {
     roles: ['akademik', 'super_admin'],
     fn: (ctx, x) => tx(async (c) => {
       const pid = x.programId || null // kosong = kelas gabungan, berlaku untuk semua pelatihan
       if (pid) { const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [pid]); if (!p) fail('Pilih pelatihan.') }
+      const [cur] = pid ? await cq(c, 'SELECT id FROM curricula WHERE id = ? AND program_id = ?', [x.curriculumId ?? '', pid]) : []
+      if (pid && !cur) fail('Pilih kurikulum pelatihan.')
+      const cid = cur?.id ?? null
       const v = cleanSubject(x)
       const [ex] = x.id ? await cq(c, 'SELECT * FROM subjects WHERE id = ? FOR UPDATE', [x.id]) : []
       if (ex && (ex.program_id ?? null) !== pid) fail('Mata pelajaran tidak bisa dipindah ke pelatihan lain.')
-      const [dup] = await cq(c, `SELECT id FROM subjects WHERE ${pid ? 'program_id = ?' : 'program_id IS NULL'} AND LOWER(name) = LOWER(?) AND id <> ?`, [...(pid ? [pid] : []), v.name, x.id ?? ''])
-      if (dup) fail(pid ? 'Mata pelajaran dengan nama itu sudah ada di pelatihan ini.' : 'Kelas gabungan dengan nama itu sudah ada.')
-      const vals = [pid, v.code, v.name, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description, x.active === false ? 0 : 1]
-      if (ex) await cq(c, 'UPDATE subjects SET program_id=?, code=?, name=?, kind=?, hours=?, hours_per_meeting=?, meetings=?, description=?, is_active=? WHERE id = ?', [...vals, x.id])
-      else await cq(c, 'INSERT INTO subjects (program_id, code, name, kind, hours, hours_per_meeting, meetings, description, is_active, id) VALUES (?,?,?,?,?,?,?,?,?,?)', [...vals, x.id || uid()])
+      if (ex && (ex.curriculum_id ?? null) !== cid) fail('Mata pelajaran tidak bisa dipindah ke kurikulum lain.')
+      const [dup] = await cq(c, `SELECT id FROM subjects WHERE ${cid ? 'curriculum_id = ?' : 'program_id IS NULL'} AND LOWER(name) = LOWER(?) AND id <> ?`, [...(cid ? [cid] : []), v.name, x.id ?? ''])
+      if (dup) fail(pid ? 'Mata pelajaran dengan nama itu sudah ada di kurikulum ini.' : 'Kelas gabungan dengan nama itu sudah ada.')
+      const vals = [pid, cid, v.code, v.name, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description, x.active === false ? 0 : 1]
+      if (ex) await cq(c, 'UPDATE subjects SET program_id=?, curriculum_id=?, code=?, name=?, kind=?, hours=?, hours_per_meeting=?, meetings=?, description=?, is_active=? WHERE id = ?', [...vals, x.id])
+      else await cq(c, 'INSERT INTO subjects (program_id, curriculum_id, code, name, kind, hours, hours_per_meeting, meetings, description, is_active, id) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [...vals, x.id || uid()])
       if (ex) await syncMeetings(c, ex.id, v.meetings)
       await audit(c, ctx.user.id, ex ? 'mapel.ubah' : 'mapel.tambah', 'subjects', v.name)
     }),
   },
-  /** Impor banyak mata pelajaran dari spreadsheet. Nama yang sama di program yang sama diperbarui bila diminta, selain itu dilewati. */
+  /** Impor banyak mata pelajaran dari spreadsheet ke kurikulum pilihan. Nama yang sama di kurikulum yang sama diperbarui bila diminta, selain itu dilewati. */
   importSubjects: {
     roles: ['akademik', 'super_admin'],
     fn: (ctx, items, updateExisting) => tx(async (c) => {
       if (!Array.isArray(items) || !items.length) fail('Tidak ada mata pelajaran untuk diimpor.')
       if (items.length > 300) fail('Maksimal 300 mata pelajaran sekali impor.')
       const out = { added: 0, updated: 0, skipped: 0 }
-      const progs = new Map()
+      const curs = new Map()
       for (const x of items) {
         const pid = x.shared ? null : String(x.programId ?? '')
-        if (pid && !progs.has(pid)) progs.set(pid, (await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [pid]))[0] ?? null)
-        if (pid && !progs.get(pid)) fail('Ada bagian yang belum dipetakan ke pelatihan yang valid.')
+        const cid = x.shared ? null : String(x.curriculumId ?? '')
+        const key = `${pid}/${cid}`
+        if (pid && !curs.has(key)) curs.set(key, (await cq(c, 'SELECT cu.id FROM curricula cu JOIN programs p ON p.id = cu.program_id WHERE cu.id = ? AND p.id = ? AND p.deleted_at IS NULL', [cid, pid]))[0] ?? null)
+        if (pid && !curs.get(key)) fail('Ada bagian yang belum dipetakan ke pelatihan dan kurikulum yang valid.')
         const v = cleanSubject(x)
-        const [ex] = await cq(c, `SELECT id FROM subjects WHERE ${pid ? 'program_id = ?' : 'program_id IS NULL'} AND LOWER(name) = LOWER(?) FOR UPDATE`, [...(pid ? [pid] : []), v.name])
+        const [ex] = await cq(c, `SELECT id FROM subjects WHERE ${cid ? 'curriculum_id = ?' : 'program_id IS NULL'} AND LOWER(name) = LOWER(?) FOR UPDATE`, [...(cid ? [cid] : []), v.name])
         if (ex) {
           if (!updateExisting) { out.skipped++; continue }
           await cq(c, 'UPDATE subjects SET code=?, kind=?, hours=?, hours_per_meeting=?, meetings=?, description=? WHERE id = ?', [v.code, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description, ex.id])
           await syncMeetings(c, ex.id, v.meetings)
           out.updated++
         } else {
-          await cq(c, 'INSERT INTO subjects (id, program_id, code, name, kind, hours, hours_per_meeting, meetings, description) VALUES (?,?,?,?,?,?,?,?,?)', [uid(), pid, v.code, v.name, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description])
+          await cq(c, 'INSERT INTO subjects (id, program_id, curriculum_id, code, name, kind, hours, hours_per_meeting, meetings, description) VALUES (?,?,?,?,?,?,?,?,?,?)', [uid(), pid, cid, v.code, v.name, v.kind, v.hours, v.hoursPerMeeting, v.meetings, v.description])
           out.added++
         }
       }
@@ -1049,6 +1132,51 @@ export const actions = {
     }),
   },
   /**
+   * Admin menambah pendaftar baru secara manual untuk calon yang kesulitan membuat akun sendiri. Hasilnya sama dengan daftar
+   * sendiri: akun peserta + registrasi di tahap isi data diri, lalu mengikuti seluruh tahapan penerimaan (bayar pendaftaran,
+   * ujian, dan seterusnya). Password awal diisi admin atau dibuat otomatis, dan wajib diganti saat pertama masuk.
+   * Mengembalikan data masuk agar admin bisa menyampaikannya ke pendaftar.
+   */
+  createPendaftar: {
+    roles: ['super_admin', 'admin_pendaftaran'],
+    fn: async (ctx, x) => {
+      const name = str(x?.name, 120)
+      const email = String(x?.email ?? '').trim().toLowerCase()
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 160) fail('Format email tidak valid.')
+      const nik = String(x?.nik ?? '').trim()
+      if (!/^\d{16}$/.test(nik)) fail('NIK harus 16 digit angka.')
+      const birthDate = String(x?.birthDate ?? '')
+      const age = ageOn(birthDate)
+      if (age == null || age < 14) fail('Tanggal lahir tidak valid.')
+      if (age > MAX_AGE) fail(`Pendaftaran hanya untuk usia maksimal ${MAX_AGE} tahun.`)
+      const phone = str(x?.phone, 30, false).replace(/[^\d+]/g, '')
+      if (phone && !/^\+?\d{9,15}$/.test(phone)) fail('Nomor HP tidak valid.')
+      const given = typeof x?.password === 'string' ? x.password : ''
+      if (given && (given.length < 8 || given.length > 100)) fail('Password awal minimal 8 karakter.')
+      const password = given || `CHI-${randomCode(6)}`
+      const hash = await bcrypt.hash(password, 10)
+      const id = uid()
+      // Nomor registrasi bisa bentrok dengan pendaftar yang daftar bersamaan; ulangi seperti daftar sendiri.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await tx(async (c) => {
+            const [dup] = await cq(c, 'SELECT id FROM users WHERE email = ?', [email])
+            if (dup) fail('Email sudah terdaftar.')
+            const [dupNik] = await cq(c, 'SELECT user_id FROM participant_profiles WHERE nik = ? UNION SELECT id FROM users WHERE nik = ?', [nik, nik])
+            if (dupNik) fail('NIK ini sudah terdaftar. Satu NIK hanya dapat dipakai untuk satu akun.')
+            // Email dianggap terverifikasi (dimasukkan admin); pendaftar masih boleh mengganti email satu kali saat pertama masuk.
+            await cq(c, "INSERT INTO users (id, name, email, phone, nik, birth_date, password_hash, role, email_verified_at, must_change_password, email_change_left) VALUES (?,?,?,?,?,?,?,'peserta',?,1,1)",
+              [id, name, email, phone, nik, birthDate, hash, dt()])
+            await registerForProgram(c, { id, email, name }, x?.programId ?? '')
+            const [r] = await cq(c, 'SELECT code FROM registrations WHERE user_id = ?', [id])
+            await audit(c, ctx.user.id, 'pendaftar.tambah-admin', 'users', `${email} (${r.code})`)
+            return { userId: id, code: r.code, email, password, generated: !given }
+          })
+        } catch (e) { if (e?.code !== 'ER_DUP_ENTRY' || attempt >= 3) throw e }
+      }
+    },
+  },
+  /**
    * Super Admin atau Akademik menambah peserta didik langsung, lengkap dengan akun penggunanya. Peserta langsung berstatus aktif
    * (tanpa ujian dan registrasi ulang), lalu melengkapi data diri dan berkas sendiri agar ruang belajar terbuka.
    */
@@ -1185,8 +1313,9 @@ async function insertPeserta(c, actor, x, bulk = false) {
 export async function upsertJadwal(c, x) {
   const [bt] = await cq(c, 'SELECT * FROM batches WHERE id = ? FOR UPDATE', [x.batchId ?? '']) // dikunci: dua simpanan bersamaan dicek berurutan
   if (!bt) fail('Angkatan tidak ditemukan.')
-  const [sj] = await cq(c, 'SELECT id, name, program_id FROM subjects WHERE id = ? AND (program_id = ? OR program_id IS NULL) AND is_active = 1', [x.subjectId ?? '', bt.program_id])
-  if (!sj) fail(`Mata pelajaran tidak ada di bank mata pelajaran program angkatan ${bt.code}.`)
+  // Mapel harus dari kurikulum angkatan ini, atau kelas gabungan.
+  const [sj] = await cq(c, 'SELECT id, name, program_id FROM subjects WHERE id = ? AND is_active = 1 AND (program_id IS NULL OR (program_id = ? AND (? IS NULL OR curriculum_id = ?)))', [x.subjectId ?? '', bt.program_id, bt.curriculum_id, bt.curriculum_id])
+  if (!sj) fail(`Mata pelajaran tidak ada di kurikulum angkatan ${bt.code}.`)
   const [ex] = await cq(c, 'SELECT * FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [bt.id, sj.id])
   if (ex && !x.editing) fail(`"${sj.name}" sudah ada di jadwal angkatan ini. Ubah jadwalnya saja.`)
   // Jumlah pertemuan mengikuti bank mata pelajaran; isian manual hanya dipakai bila bank belum mengisinya.
@@ -1246,6 +1375,94 @@ export async function upsertJadwal(c, x) {
     codes.push(t.code)
   }
   return { existed: !!ex, summary: `${sj.name} (${codes.join(', ')}): ${ins.name}, ${days.join('/')} ${x.startTime}-${x.endTime}${room ? `, ${room}` : ''}` }
+}
+/**
+ * Simpan (next berisi { amount, reason }) atau hapus (next = null) potongan satu biaya pendaftar, lalu sesuaikan tahapan
+ * pembayaran pendaftaran dan jadwal cicilannya. Semua dalam satu transaksi: pelanggaran aturan membatalkan perubahan.
+ */
+export async function changeDiscount(c, ctx, regId, target, next) {
+  const [r] = await cq(c, 'SELECT * FROM registrations WHERE id = ? FOR UPDATE', [regId ?? ''])
+  if (!r) fail('Pendaftar tidak ditemukan.', 404)
+  if (!['pending_payment', 'waiting_verification', 'active'].includes(r.status)) fail('Pendaftaran ini sudah tidak berjalan atau sudah selesai, jadi potongannya tidak bisa diubah.')
+  const [pend] = await cq(c, "SELECT id FROM payments WHERE registration_id = ? AND status = 'submitted' LIMIT 1", [r.id])
+  if (pend) fail('Ada bukti pembayaran yang menunggu verifikasi. Setujui atau tolak dulu, lalu atur potongannya.')
+  const s = await getSettings(c)
+  const fee = Number(s.regFee ?? REG_FEE_DEFAULT)
+  const [ex] = await cq(c, 'SELECT * FROM registration_discounts WHERE registration_id = ? AND target = ? FOR UPDATE', [r.id, target])
+  if (!next && !ex) fail('Potongan tidak ditemukan.')
+  const regBefore = await regFeeDue(c, r, s)
+  const creditBefore = await scheduleCredit(c, r, s)
+  const [paidReg] = await cq(c, "SELECT id FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified' LIMIT 1", [r.id])
+  const rpx = (n) => 'Rp' + Number(n).toLocaleString('id-ID')
+
+  let label = ex?.label ?? ''
+  if (next) {
+    // Dasar potongan: nominal biaya yang dipotong. Potongan tidak boleh melebihinya.
+    let base
+    if (target === 'pendaftaran') {
+      const [b] = r.batch_id ? await cq(c, 'SELECT code, free_reg_fee FROM batches WHERE id = ?', [r.batch_id]) : []
+      if (b?.free_reg_fee) fail(`Angkatan ${b.code} sudah dibebaskan dari biaya pendaftaran.`)
+      if (paidReg) fail('Biaya pendaftaran sudah dibayar lunas. Berikan potongan pada biaya pelatihan bila perlu.')
+      base = fee; label = 'Biaya pendaftaran'
+    } else if (target === 'pelatihan') {
+      const [p] = await cq(c, 'SELECT title, price FROM programs WHERE id = ?', [r.program_id])
+      base = Number(p.price); label = `Biaya pelatihan ${p.title}`
+    } else {
+      const [fi] = await cq(c, 'SELECT name, amount FROM fee_items WHERE id = ? AND is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [target, r.program_id, r.user_id])
+      if (!fi) fail('Pilih biaya yang dipotong: biaya pendaftaran, biaya pelatihan, atau biaya tambahan yang berlaku untuk pendaftar ini.')
+      base = Number(fi.amount); label = fi.name
+    }
+    const amount = Number(next.amount)
+    if (!Number.isInteger(amount) || amount < 1) fail('Nominal potongan harus lebih dari Rp0.')
+    if (amount > base) fail(`Potongan melebihi ${label.toLowerCase()} (${rpx(base)}).`)
+    const reason = str(next.reason, 255)
+    if (ex) await cq(c, 'UPDATE registration_discounts SET amount = ?, reason = ?, label = ?, created_by = ? WHERE id = ?', [amount, reason, label, ctx.user.id, ex.id])
+    else await cq(c, 'INSERT INTO registration_discounts (id, registration_id, target, label, amount, reason, created_by) VALUES (?,?,?,?,?,?,?)', [uid(), r.id, target, label, amount, reason, ctx.user.id])
+  } else {
+    await cq(c, 'DELETE FROM registration_discounts WHERE id = ?', [ex.id])
+  }
+
+  // Biaya pendaftaran yang kini Rp0 membuka ujian tulis seperti pembayaran yang dikonfirmasi.
+  const regAfter = await regFeeDue(c, r, s)
+  if (target === 'pendaftaran' && !paidReg) {
+    if (regAfter > 0 && regBefore === 0 && r.source !== 'admin' && !['data', 'bayar_daftar'].includes(r.stage)) {
+      fail('Pendaftar sudah melewati tahap pembayaran pendaftaran karena biayanya dipotong seluruhnya, jadi potongan ini tidak bisa dikurangi lagi.')
+    }
+    if (regAfter === 0 && r.stage === 'bayar_daftar') {
+      await cq(c, "UPDATE registrations SET stage = 'ujian' WHERE id = ?", [r.id])
+    }
+  }
+  // Jadwal cicilan yang sudah ada mengikuti perubahan total biaya.
+  const delta = creditBefore - await scheduleCredit(c, r, s)
+  await applyScheduleDelta(c, r.id, delta)
+  await syncGraduation(c, r.id)
+
+  const { reg, other } = await discountsOf(c, r.id)
+  const stageNote = target === 'pendaftaran' && regAfter === 0 && r.stage === 'bayar_daftar' ? ' Biaya pendaftaran Anda menjadi Rp0, jadi ujian online kini terbuka.' : ''
+  const body = next
+    ? `Bagian keuangan memberikan potongan ${label.toLowerCase()} sebesar ${rpx(next.amount)}.${target === 'pendaftaran' ? ` Biaya pendaftaran yang perlu dibayar kini ${rpx(regAfter)}.` : ''}${stageNote} Lihat rincian tagihan di aplikasi.`
+    : `Potongan ${label.toLowerCase()} dibatalkan bagian keuangan. Lihat rincian tagihan terbaru di aplikasi.`
+  await notify(c, r.user_id, next ? 'Potongan biaya diberikan' : 'Potongan biaya dibatalkan', body, stageNote ? '/app/ujian' : '/app')
+  await audit(c, ctx.user.id, next ? 'keuangan.potongan' : 'keuangan.batal-potongan', 'registration_discounts', `${r.code} ${label}: ${next ? `${rpx(next.amount)} (${str(next.reason, 255)})` : 'dihapus'}; total potongan ${rpx(reg + other)}`)
+}
+
+/**
+ * Kurikulum untuk angkatan: yang diminta bila milik pelatihan angkatan; bila kosong atau milik pelatihan lain (pelatihan diganti),
+ * pakai kurikulum terbaru pelatihan. strict = pilihan wajib valid. Ganti kurikulum ditolak bila jadwal angkatan
+ * masih memuat mata pelajaran dari kurikulum lain.
+ */
+async function batchCurriculum(c, programId, wanted, ex, strict = false) {
+  let [cur] = wanted ? await cq(c, 'SELECT id, program_id, name, is_active FROM curricula WHERE id = ?', [wanted]) : []
+  if (wanted && !cur) fail('Kurikulum tidak ditemukan.')
+  if (cur && cur.program_id !== programId) { if (strict) fail('Kurikulum itu bukan milik pelatihan angkatan ini.'); cur = undefined }
+  if (cur && !cur.is_active && cur.id !== ex?.curriculum_id) fail(`Kurikulum ${cur.name} sudah nonaktif.`)
+  if (!cur) [cur] = await cq(c, 'SELECT id, name FROM curricula WHERE program_id = ? ORDER BY is_active DESC, created_at DESC LIMIT 1', [programId])
+  if (!cur) return null
+  if (ex && ex.curriculum_id !== cur.id) {
+    const bad = await cq(c, 'SELECT sj.name FROM batch_subjects bs JOIN subjects sj ON sj.id = bs.subject_id WHERE bs.batch_id = ? AND sj.program_id IS NOT NULL AND NOT (sj.curriculum_id <=> ?)', [ex.id, cur.id])
+    if (bad.length) fail(`Jadwal angkatan ini masih memuat mata pelajaran di luar kurikulum ${cur.name}: ${bad.slice(0, 5).map((x) => x.name).join(', ')}${bad.length > 5 ? ', dan lainnya' : ''}. Hapus jadwal itu dulu.`)
+  }
+  return cur.id
 }
 /** Samakan jatah pertemuan di jadwal semua angkatan dengan jumlah pertemuan di bank mata pelajaran (tidak di bawah pertemuan yang sudah dibuat). */
 async function syncMeetings(c, subjectId, meetings) {

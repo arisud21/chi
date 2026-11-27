@@ -40,6 +40,7 @@ Jalur uji ini memakai angkatan **FO-2026-B3 (Front Office Hotel)**, karena jadwa
 1. Masuk sebagai `pendaftaran@cih.demo` → **Program dan angkatan**. Pastikan FO-2026-B3 berstatus `open` dengan kuota 20. Coba **Angkatan** untuk membuat angkatan baru (status `draft`), lalu **Hapus** (angkatan kosong boleh dihapus).
 2. Masuk sebagai `akademik@cih.demo`. Penyusunan jadwal dua tahap:
    - **Bank mata pelajaran**: pilih pelatihan **Front Office Hotel**. Terlihat 6 mata pelajaran (teori atau praktik, dengan jumlah jam). Coba **Mata pelajaran** untuk menambah satu, ubah, nonaktifkan (hilang dari pilihan jadwal tetapi tidak terhapus), dan **Hapus** (hanya bisa bila belum dipakai jadwal).
+   - **Kurikulum pelatihan**: di Bank mata pelajaran, tiap pelatihan punya satu atau beberapa kurikulum (data lama masuk ke **Kurikulum awal**). Klik **Kurikulum baru**, beri nama (misalnya Kurikulum 2027), lalu pilih **Salin dari Kurikulum awal** agar mata pelajarannya tersalin dan tinggal diubah. Di **Jadwal pembelajaran**, pilih kurikulum tiap angkatan di kolom **Kurikulum angkatan**; pilihan mata pelajaran jadwal mengikuti kurikulum itu ditambah kelas gabungan. Angkatan baru otomatis memakai kurikulum aktif terbaru.
    - **Jadwal angkatan**: **1. Pilih pelatihan** (Front Office Hotel) → **2.** daftar angkatan pelatihan itu. FO-2026-B3 sudah berjadwal dan menampilkan mata pelajaran terpilih dengan jumlah pertemuan. Klik **Ubah jadwal** untuk melihat bentuk formulirnya: instruktur, hari, jam, lokasi, lalu centang mata pelajaran dari bank dan isi jumlah pertemuan tiap mapel. Pilih pelatihan lain (misalnya Housekeeping): angkatannya bertanda "belum ditetapkan", dan hanya mata pelajaran milik pelatihan itu yang muncul.
 
 ---
@@ -53,6 +54,8 @@ Jalur uji ini memakai angkatan **FO-2026-B3 (Front Office Hotel)**, karena jadwa
 4. Klik **Daftar dan terbitkan tagihan**. Anda masuk ke **Pendaftaran saya**: ada nominal tagihan (harga + kode unik 3 digit), rekening tujuan, dan batas bayar 48 jam.
 
 **Cek di sisi admin**: `pendaftaran@cih.demo` → **Pendaftar**. Peserta baru muncul dengan status "Menunggu pembayaran". Super Admin atau Admin Pendaftaran → **Pengumuman dan email** → antrean berisi email tagihan dan verifikasi.
+
+**Pendaftar yang kesulitan membuat akun**: Admin Pendaftaran atau Super Admin → **Pendaftar** → **Tambah pendaftar**. Isi nama, email, no HP, NIK, tanggal lahir, dan jenis pelatihan. Password awal boleh dikosongkan agar dibuat otomatis. Setelah disimpan, data masuk (email dan password awal) ditampilkan sekali beserta tombol **Kirim lewat WhatsApp** dan **Salin pesan**. Pendaftar wajib mengganti password saat pertama masuk, lalu mengikuti tahapan yang sama dengan pendaftaran mandiri (isi data diri, bayar pendaftaran, ujian online).
 
 ### 4. Verifikasi email (boleh ditunda)
 Di Beranda peserta ada peringatan "Email belum diverifikasi". Karena mode dev tidak mengirim email sungguhan, klik **Simulasikan klik tautan (mode dev)**. Pembayaran tidak menunggu verifikasi email ini.
@@ -68,6 +71,7 @@ Di Beranda peserta ada peringatan "Email belum diverifikasi". Karena mode dev ti
 1. `keuangan@cih.demo` → **Verifikasi pembayaran**. Kartu menampilkan tagihan, nominal dibayar, selisih, dan tautan **lihat bukti**.
 2. **Uji penolakan dulu**: klik **Tolak**, kosongkan alasan lalu kirim (ditolak, alasan wajib), isi alasan lalu kirim. Di sisi peserta, status kembali "Menunggu pembayaran" dengan alasan penolakan; unggah ulang bukti.
 3. Kembali ke Keuangan → **Setujui**. Kwitansi masuk antrean email.
+4. **Potongan biaya**: di menu **Pendaftar**, buka **Rincian** seorang pendaftar (juga tersedia di rincian Peserta didik). Di bagian **Potongan biaya**, klik **Beri potongan**, pilih biaya yang dipotong (biaya pendaftaran, biaya pelatihan, atau biaya tambahan), isi nominal atau persen beserta alasannya. Tagihan dan jadwal cicilan langsung disesuaikan, pendaftar mendapat notifikasi, dan daftar menampilkan penanda **Potongan**. Bila biaya pendaftaran dipotong seluruhnya, pendaftar dianggap lunas dan ujian online langsung terbuka.
 
 **Cek**: status registrasi peserta menjadi **Aktif**. Di **Pendaftar** (Admin Pendaftaran) kolom Data diri berubah menjadi **Menunggu diisi**, dashboard Admin Pendaftaran menampilkan tugas "peserta sudah bayar tetapi belum mengisi data diri", dan ada tombol **Kirim pengingat**.
 

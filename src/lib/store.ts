@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type {
-  Assignment, Attendance, AuditLog, ChiTodayItem, Batch, BatchSubject, Subject, ClassSession, EmailItem, Grade, SubjectGrade, MediaAsset, Material, Payment,
+  Assignment, Attendance, AuditLog, ChiTodayItem, Batch, BatchSubject, Curriculum, Discount, Subject, ClassSession, EmailItem, Grade, SubjectGrade, MediaAsset, Material, Payment,
   Profile, Program, Registration, Revision, Installment, PaymentPlan, FeeItem, ExamToken, Doc, DocKind, Exam, QuestionBank, Question, ExamAttempt, Notification, Company, Placement, LogbookEntry, CashTx, NewsItem, Section, SiteSettings, Submission, User,
 } from './types'
 
@@ -17,6 +17,7 @@ export interface State {
   programs: Program[]
   batches: Batch[]
   seats: Record<string, number>
+  curricula: Curriculum[]
   subjects: Subject[]
   batchSubjects: BatchSubject[]
   stats: { graduates: number; participants: number }
@@ -41,6 +42,7 @@ export interface State {
   publishedRevisionId: string | null
   revisions: Revision[]
   installments: Installment[]
+  discounts: Discount[]
   documents: Doc[]
   plans: PaymentPlan[]
   feeItems: FeeItem[]
@@ -59,10 +61,10 @@ export interface State {
 }
 
 const EMPTY: State = {
-  loaded: false, devMode: false, sessionUserId: null, users: [], programs: [], batches: [], seats: {}, subjects: [], batchSubjects: [], stats: { graduates: 0, participants: 0 },
+  loaded: false, devMode: false, sessionUserId: null, users: [], programs: [], batches: [], seats: {}, curricula: [], subjects: [], batchSubjects: [], stats: { graduates: 0, participants: 0 },
   registrations: [], payments: [], sessions: [], materials: [], assignments: [], submissions: [], attendances: [], profiles: [], grades: [], subjectGrades: [], gradeWeights: { absensi: 10, tugas: 20, teori: 30, praktik: 40 }, gradeLetters: [85, 80, 75, 70, 60, 50, 40],
   audit: [], emails: [], settings: {} as SiteSettings, media: [], publishedSections: [], draftSections: [], publishedRevisionId: null, revisions: [],
-  installments: [], documents: [], plans: [], feeItems: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], notifications: [], companies: [], placements: [], logbook: [], cashTx: [], news: [], chiToday: [],
+  installments: [], discounts: [], documents: [], plans: [], feeItems: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], notifications: [], companies: [], placements: [], logbook: [], cashTx: [], news: [], chiToday: [],
 }
 
 let state: State = EMPTY
@@ -283,6 +285,29 @@ export const deleteBatch = (id: string) => rpc('deleteBatch', id)
 export const saveBatch = (b: Batch) => rpc('saveBatch', b)
 
 /* ---------- pembelajaran ---------- */
+/** Kurikulum terbaru yang aktif di pelatihan: dipakai bawaan angkatan baru dan tampilan katalog. */
+export const currentCurriculum = (s: Pick<State, 'curricula'>, programId: string) =>
+  s.curricula.filter((c) => c.programId === programId && c.active).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+/** Kurikulum angkatan: yang ditetapkan Akademik, atau kurikulum terbaru pelatihannya. */
+export const batchCurriculumId = (s: Pick<State, 'curricula'>, b: Pick<Batch, 'programId' | 'curriculumId'>) => b.curriculumId || currentCurriculum(s, b.programId)?.id || ''
+/** Mata pelajaran yang bisa dipakai angkatan: milik kurikulumnya, atau kelas gabungan. */
+export const subjectFitsBatch = (s: Pick<State, 'curricula'>, x: Subject, b: Pick<Batch, 'programId' | 'curriculumId'>) => {
+  if (x.programId === '') return true
+  if (x.programId !== b.programId) return false
+  const cid = batchCurriculumId(s, b)
+  return !cid || x.curriculumId === cid
+}
+/** Mata pelajaran aktif yang ditampilkan di katalog pelatihan: milik kurikulum terbaru (opsional ditambah kelas gabungan). */
+export const catalogSubjects = (s: Pick<State, 'curricula' | 'subjects'>, programId: string, withShared = false) => {
+  const cid = currentCurriculum(s, programId)?.id
+  return s.subjects.filter((x) => x.active && ((withShared && x.programId === '') || (x.programId === programId && (!cid || x.curriculumId === cid))))
+}
+/** Potongan biaya pendaftar (bagian keuangan). target: 'pendaftaran', 'pelatihan', atau id biaya tambahan. */
+export const saveDiscount = (regId: string, x: { target: string; amount: number; reason: string }) => rpc('saveDiscount', regId, x)
+export const deleteDiscount = (regId: string, target: string) => rpc('deleteDiscount', regId, target)
+export const saveCurriculum = (x: Curriculum & { copyFrom?: string }) => rpc('saveCurriculum', x)
+export const deleteCurriculum = (id: string) => rpc('deleteCurriculum', id)
+export const setBatchCurriculum = (batchId: string, curriculumId: string) => rpc('setBatchCurriculum', batchId, curriculumId)
 export const saveSubject = (x: Subject) => rpc('saveSubject', x)
 export const importSubjects = (items: Record<string, unknown>[], updateExisting: boolean) => rpc('importSubjects', items, updateExisting)
 export const readSheet = (url: string) => post('/api/subjects/sheet', { url })
@@ -369,6 +394,10 @@ export const saveUser = (u: User, password?: string) => rpc('saveUser', u, passw
 export const setUserPassword = (userId: string, password: string, mustChange: boolean) => rpc('setUserPassword', userId, password, mustChange)
 export interface PesertaInput { name: string; email: string; phone: string; nip: string; nik: string; password: string; programId: string; batchId: string }
 export const createPeserta = (x: PesertaInput) => rpc('createPeserta', x)
+/** Pendaftar baru yang ditambahkan admin (calon yang kesulitan membuat akun). password kosong = dibuat otomatis. */
+export interface PendaftarInput { name: string; email: string; phone: string; nik: string; birthDate: string; programId: string; password: string }
+export interface PendaftarCreated { userId: string; code: string; email: string; password: string; generated: boolean }
+export const createPendaftar = (x: PendaftarInput) => rpc('createPendaftar', x)
 /** Hapus permanen pendaftar atau peserta didik beserta seluruh datanya. */
 export const deleteUser = (userId: string) => rpc('deleteUser', userId)
 export const deletePeserta =(userId: string) => rpc('deletePeserta', userId)

@@ -81,6 +81,17 @@ export interface Batch {
   endTime: string
   plannedSessions: number
   freeRegFee?: boolean // angkatan dibebaskan dari biaya pendaftaran (biaya registrasi tetap ditagih)
+  curriculumId?: string // kurikulum yang dipakai angkatan ini; kosong = mengikuti kurikulum terbaru pelatihan
+}
+
+/** Kurikulum pelatihan: kumpulan mata pelajaran. Satu pelatihan bisa punya beberapa kurikulum; tiap angkatan memakai satu. */
+export interface Curriculum {
+  id: string
+  programId: string
+  name: string
+  description: string
+  active: boolean
+  createdAt: string
 }
 
 export type Stage = 'data' | 'bayar_daftar' | 'ujian' | 'menunggu_hasil' | 'registrasi_ulang' | 'aktif' | 'tidak_lulus'
@@ -133,6 +144,7 @@ export interface Payment {
 export interface Subject {
   id: string
   programId: string // kosong = kelas gabungan, berlaku untuk semua pelatihan
+  curriculumId: string // kurikulum pelatihan; kosong untuk kelas gabungan
   code?: string
   name: string
   kind: 'teori' | 'praktik' | 'teori_praktik'
@@ -316,6 +328,8 @@ export interface Exam {
 export interface ExamToken { id: string; examId: string; token: string; expiresAt: string; createdAt: string }
 export interface QuestionBank { id: string; name: string; count: number }
 export interface Question { id: string; bankId: string; body: string; options: string[]; correctIdx: number }
+/** Potongan biaya satu pendaftar dari bagian keuangan. target: 'pendaftaran', 'pelatihan', atau id biaya tambahan. */
+export interface Discount { id: string; registrationId: string; target: string; label: string; amount: number; reason: string; createdBy: string; createdAt: string }
 export interface ExamAttempt { id: string; examId: string; registrationId: string; startedAt: string; finishedAt: string; score: number | null }
 export interface Notification { id: string; title: string; body: string; link: string; read: boolean; createdAt: string }
 

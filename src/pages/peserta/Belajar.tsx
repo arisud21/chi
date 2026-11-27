@@ -2,7 +2,7 @@ import { IconArrowLeft, IconLock } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Empty, Field, Modal, PageHeader, Reveal, Table, dateTimeID, useAct } from '../../components/ui'
-import { DOC_KINDS, submitWork, useStore } from '../../lib/store'
+import { DOC_KINDS, catalogSubjects, submitWork, useStore } from '../../lib/store'
 import { SUBJECT_KIND } from '../staff/ImporMapel'
 import { LockedNotice } from './DataDiri'
 import { useMe } from './Peserta'
@@ -80,7 +80,7 @@ export function Belajar() {
 /** Mata pelajaran di bank program (sebelum angkatan dan jadwalnya ditetapkan Akademik). */
 function Kurikulum({ programId }: { programId: string }) {
   const s = useStore((x) => x)
-  const list = s.subjects.filter((x) => x.active && x.programId === programId).sort((a, b) => a.name.localeCompare(b.name))
+  const list = catalogSubjects(s, programId).sort((a, b) => a.name.localeCompare(b.name))
   if (!list.length) return null
   return (
     <div className="mt-4">

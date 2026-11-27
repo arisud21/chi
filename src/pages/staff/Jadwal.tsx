@@ -2,7 +2,7 @@ import { IconPencil, IconPlus, IconTrash, IconUpload } from '@tabler/icons-react
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Empty, Field, Modal, PageHeader, Table, dateID, useAct } from '../../components/ui'
-import { deleteJadwal, newId, saveBatch, saveJadwal, useStore, type JadwalInput } from '../../lib/store'
+import { batchCurriculumId, currentCurriculum, deleteJadwal, newId, saveBatch, saveJadwal, setBatchCurriculum, subjectFitsBatch, useStore, type JadwalInput } from '../../lib/store'
 import type { Batch, Subject, User } from '../../lib/types'
 import { SUBJECT_KIND } from './ImporMapel'
 import { ImportJadwalModal } from './JadwalImport'
@@ -29,7 +29,10 @@ export function Jadwal() {
   const instructors = s.users.filter((u) => u.role === 'instruktur' && u.active)
   const name = (id: string) => s.users.find((u) => u.id === id)?.name
   const code = (id: string) => s.batches.find((b) => b.id === id)?.code ?? ''
-  const bank = s.subjects.filter((x) => (x.programId === programId || x.programId === '') && x.active).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+  // Pilihan mata pelajaran: kurikulum angkatan terpilih (atau kurikulum terbaru bila belum ada angkatan) ditambah kelas gabungan.
+  const curId = batch ? batchCurriculumId(s, batch) : currentCurriculum(s, programId)?.id ?? ''
+  const bank = s.subjects.filter((x) => x.active && subjectFitsBatch(s, x, { programId, curriculumId: curId })).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+  const curricula = s.curricula.filter((c) => c.programId === programId)
   const prog = programs.find((p) => p.id === programId)
   /** Angkatan lain di grup kelas gabungan yang sama. */
   const groupOf = (batchId: string, subjectId: string) => {
@@ -65,7 +68,7 @@ export function Jadwal() {
       <PageHeader title="Jadwal pembelajaran" sub="Tambahkan jadwal satu per satu atau impor dari Excel. Mata pelajaran kelas gabungan dijadwalkan sekali untuk angkatan di seluruh program."
         action={<div className="flex flex-wrap gap-2">
           <button className="btn-ghost" onClick={() => setImp(true)}><IconUpload size={18} />Impor jadwal</button>
-          {prog && <button className="btn-ghost" onClick={() => setNb({ id: newId('b'), programId, code: '', startDate: '', endDate: '', quota: 20, status: 'draft', location: '', scheduleDays: '', startTime: '', endTime: '', plannedSessions: 0, angkatan: null })}><IconPlus size={18} />Angkatan baru</button>}
+          {prog && <button className="btn-ghost" onClick={() => setNb({ id: newId('b'), programId, code: '', startDate: '', endDate: '', quota: 20, status: 'draft', location: '', scheduleDays: '', startTime: '', endTime: '', plannedSessions: 0, angkatan: null, curriculumId: currentCurriculum(s, programId)?.id ?? '' })}><IconPlus size={18} />Angkatan baru</button>}
         </div>} />
 
       <div className="mb-5 grid max-w-2xl gap-3 sm:grid-cols-2">
@@ -77,7 +80,7 @@ export function Jadwal() {
         </label>
       </div>
 
-      {bank.length === 0 && <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Pelatihan ini belum punya mata pelajaran aktif. <Link to="/admin/mapel" className="font-semibold underline">Tambahkan di Bank mata pelajaran</Link> dulu.</p>}
+      {bank.length === 0 && <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">{curId ? 'Kurikulum angkatan ini belum punya mata pelajaran aktif.' : 'Pelatihan ini belum punya kurikulum.'} <Link to="/admin/mapel" className="font-semibold underline">Tambahkan di Bank mata pelajaran</Link> dulu.</p>}
 
       {!batch ? <div className="card"><Empty title="Belum ada angkatan" body="Tambahkan angkatan untuk pelatihan ini lewat tombol Angkatan baru." /></div> : (
         <section className="card">
@@ -87,6 +90,13 @@ export function Jadwal() {
               <p className="text-sm text-muted">{dateID(batch.startDate)} sampai {dateID(batch.endDate)} · {rows.length} jadwal · {rows.reduce((t, r) => t + r.sessions, 0)} pertemuan</p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
+              <label className="block min-w-52"><span className="label">Kurikulum angkatan</span>
+                <select className="input" value={curId} disabled={!curricula.length} title="Mata pelajaran yang bisa dijadwalkan mengikuti kurikulum ini"
+                  onChange={(e) => act(setBatchCurriculum(batch.id, e.target.value), 'Kurikulum angkatan diganti.')}>
+                  {!curId && <option value="">Belum ada kurikulum</option>}
+                  {curricula.filter((c) => c.active || c.id === curId).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </label>
               <button className="btn-primary" disabled={free.length === 0} title={free.length === 0 ? 'Semua mata pelajaran sudah punya jadwal' : undefined} onClick={add}><IconPlus size={18} />Tambah jadwal</button>
             </div>
           </div>
@@ -202,6 +212,12 @@ export function Jadwal() {
             <Field label="Kuota"><input className="input" type="number" min={1} required value={nb.quota} onChange={(e) => setNb({ ...nb, quota: +e.target.value })} /></Field>
             <Field label="Status"><select className="input" value={nb.status} onChange={(e) => setNb({ ...nb, status: e.target.value as Batch['status'] })}><option value="draft">Draf</option><option value="open">Dibuka</option><option value="running">Berjalan</option></select></Field>
           </div>
+          <Field label="Kurikulum" hint="Menentukan mata pelajaran yang bisa dijadwalkan untuk angkatan ini.">
+            <select className="input" value={nb.curriculumId ?? ''} onChange={(e) => setNb({ ...nb, curriculumId: e.target.value })}>
+              {!curricula.some((c) => c.active) && <option value="">Belum ada kurikulum</option>}
+              {curricula.filter((c) => c.active).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
           <button className="btn-primary w-full">Buat angkatan</button>
         </form>}
       </Modal>

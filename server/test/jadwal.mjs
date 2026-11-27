@@ -31,7 +31,10 @@ const sched = (b, subjects, over = {}) => ({ batchId: b.id, instructorId: insId,
 console.log('Bank mata pelajaran')
 check('seed memuat bank mapel per pelatihan', hkSubs.length >= 4 && foSubs.length >= 5, `${hkSubs.length}/${foSubs.length}`)
 check('publik hanya melihat mapel aktif', (await anon.state()).subjects.length > 0 && (await anon.state()).subjects.every((x) => x.active))
-const newSj = { id: crypto.randomUUID(), programId: hk.id, name: 'Mapel Uji ' + Date.now() % 100000, kind: 'praktik', hours: 6, description: '', active: true }
+const hkCur = st.curricula.find((c) => c.programId === hk.id)
+check('migrasi membuat kurikulum awal untuk pelatihan yang punya mapel', !!hkCur && hkSubs.every((x) => x.curriculumId === hkCur.id))
+check('angkatan memakai kurikulum pelatihannya', st.batches.filter((b) => b.programId === hk.id).every((b) => b.curriculumId === hkCur.id))
+const newSj = { id: crypto.randomUUID(), programId: hk.id, curriculumId: hkCur.id, name: 'Mapel Uji ' + Date.now() % 100000, kind: 'praktik', hours: 6, description: '', active: true }
 check('instruktur tidak bisa mengelola bank mapel', (await ins1.rpc('saveSubject', newSj)).status === 403)
 check('Admin Pendaftaran tidak bisa mengelola bank mapel', (await adm.rpc('saveSubject', newSj)).status === 403)
 check('Akademik menambah mapel', (await akad.rpc('saveSubject', newSj)).ok === true)
@@ -43,6 +46,29 @@ check('mapel yang dipakai jadwal tidak bisa dihapus', (await akad.rpc('deleteSub
 check('mapel nonaktif tidak tampil untuk publik', (await akad.rpc('saveSubject', { ...newSj, active: false })).ok === true && !(await anon.state()).subjects.some((x) => x.id === newSj.id))
 check('staf tetap melihat mapel nonaktif', (await akad.state()).subjects.some((x) => x.id === newSj.id && !x.active))
 check('mapel yang belum dipakai bisa dihapus', (await akad.rpc('deleteSubject', newSj.id)).ok === true)
+check('mapel tanpa kurikulum ditolak', (await akad.rpc('saveSubject', { ...newSj, id: crypto.randomUUID(), curriculumId: '' })).ok === false)
+
+console.log('Kurikulum pelatihan')
+const curNew = { id: crypto.randomUUID(), programId: hk.id, name: 'Kurikulum Uji ' + Date.now() % 100000, description: '', active: true, copyFrom: hkCur.id }
+check('Admin Pendaftaran tidak bisa membuat kurikulum', (await adm.rpc('saveCurriculum', curNew)).status === 403)
+check('Akademik membuat kurikulum baru dengan menyalin kurikulum awal', (await akad.rpc('saveCurriculum', curNew)).ok === true)
+const stC = await akad.state()
+const copied = stC.subjects.filter((x) => x.curriculumId === curNew.id)
+check('mata pelajaran tersalin sebagai data baru', copied.length === hkSubs.length && copied.every((x) => !hkSubs.some((y) => y.id === x.id)))
+check('nama kurikulum kembar ditolak', (await akad.rpc('saveCurriculum', { ...curNew, id: crypto.randomUUID(), copyFrom: '' })).ok === false)
+check('nama mapel sama boleh di kurikulum lain', (await akad.rpc('saveSubject', { ...newSj, id: crypto.randomUUID(), curriculumId: curNew.id, name: hkSubs[0].name + ' Lanjut' })).ok === true)
+check('mapel tidak bisa dipindah ke kurikulum lain', (await akad.rpc('saveSubject', { ...copied[0], curriculumId: hkCur.id })).ok === false)
+const hkB = stC.batches.find((b) => b.programId === hk.id && stC.batchSubjects.some((x) => x.batchId === b.id))
+if (hkB) check('ganti kurikulum ditolak bila jadwal memuat mapel kurikulum lama', (await akad.rpc('setBatchCurriculum', hkB.id, curNew.id)).ok === false)
+const hkFree = stC.batches.find((b) => b.programId === hk.id && !stC.batchSubjects.some((x) => x.batchId === b.id) && !['finished', 'cancelled'].includes(b.status))
+if (hkFree) {
+  check('Akademik mengganti kurikulum angkatan yang belum berjadwal', (await akad.rpc('setBatchCurriculum', hkFree.id, curNew.id)).ok === true)
+  check('jadwal menolak mapel dari kurikulum lain', (await akad.rpc('saveJadwal', { batchId: hkFree.id, subjectId: hkSubs[0].id, editing: false, sessions: 1, instructorId: insId, days: ['Sen'], startTime: '07:00', endTime: '08:00', room: '' })).ok === false)
+  check('kurikulum yang dipakai angkatan tidak bisa dihapus', (await akad.rpc('deleteCurriculum', curNew.id)).ok === false)
+  check('kurikulum angkatan dikembalikan', (await akad.rpc('setBatchCurriculum', hkFree.id, hkCur.id)).ok === true)
+}
+check('kurikulum dari pelatihan lain ditolak untuk angkatan', (await akad.rpc('setBatchCurriculum', fo1.id, hkCur.id)).ok === false)
+check('kurikulum yang belum dipakai bisa dihapus beserta mapelnya', (await akad.rpc('deleteCurriculum', curNew.id)).ok === true && !(await akad.state()).subjects.some((x) => x.curriculumId === curNew.id))
 
 console.log('Pembagian peran')
 const two = [{ subjectId: hkSubs[0].id, sessions: 1 }, { subjectId: hkSubs[1].id, sessions: 1 }]

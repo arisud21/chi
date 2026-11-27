@@ -37,7 +37,7 @@ Panduan uji lengkap dari pendaftaran sampai kelulusan: `PANDUAN_PENGGUNAAN.md`. 
 | Peserta | Katalog, tagihan dengan kode unik, unggah bukti, form data diri lengkap (wajib setelah bayar dikonfirmasi; ruang belajar terkunci sebelum itu), ruang belajar (jadwal, materi, tugas, nilai), transkrip PDF |
 | Keuangan | Antrean verifikasi dengan selisih nominal, setujui atau tolak (alasan wajib), kwitansi lewat antrean email |
 | Pendaftaran | Program, angkatan, **Pendaftar** (belum melengkapi data diri, ada tombol pengingat) dan **Peserta** (data diri lengkap, detail dan berkas),  pengumuman email per segmen |
-| Akademik | Bank mata pelajaran per pelatihan, jadwal angkatan (pilih pelatihan, lalu instruktur, hari, jam, lokasi, dan mata pelajaran dari bank beserta jumlah pertemuannya), validasi nilai dengan penimpaan beralasan |
+| Akademik | Bank mata pelajaran per kurikulum pelatihan (tiap angkatan memakai satu kurikulum, jadi mata pelajarannya bisa berbeda), jadwal angkatan (pilih pelatihan, lalu instruktur, hari, jam, lokasi, dan mata pelajaran dari bank beserta jumlah pertemuannya), validasi nilai dengan penimpaan beralasan |
 | Instruktur | Pertemuan per angkatan dari mata pelajaran yang dipilih Akademik (ada jatah per mapel), materi (PDF atau tautan) per pertemuan, absensi, nilai teori dan praktik, tugas dan penilaiannya |
 | CMS (Super Admin dan Admin Pendaftaran; hapus media hanya Super Admin) | Section terstruktur, draf, pratinjau desktop dan mobile, terbit, riwayat dan rollback, pustaka media (alt wajib, WebP dua ukuran) |
 | Super Admin | Pengguna staf (paksa ganti password), pengaturan, audit log |

@@ -2,7 +2,7 @@ import { IconAlertCircle, IconCheck, IconDownload, IconUpload } from '@tabler/ic
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Field, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct } from '../../components/ui'
-import { itemsFor, shortfallOf, summarize } from '../../lib/billing'
+import { itemsFor, regFeeFor, shortfallOf, summarize } from '../../lib/billing'
 import { WaButton } from '../../lib/wa'
 import { DOC_KINDS, DOC_LABEL, choosePlan, resumeRegistration, submitProof, uploadDocument, useStore } from '../../lib/store'
 import type { DocKind, Installment, PayKind, PaymentPlan, Registration, Stage } from '../../lib/types'
@@ -347,7 +347,8 @@ export function Tahapan() {
   const cur = rank(reg.stage)
   const dead = reg.status === 'cancelled' || reg.status === 'expired'
   const st = (i: number): 'done' | 'now' | 'next' => (dead ? (i < cur ? 'done' : 'next') : i < cur ? 'done' : i === cur ? 'now' : 'next')
-  const regFee = s.settings.regFee ?? 200_000
+  const regFee = regFeeFor(s, reg) // tarif umum dikurangi potongan dari bagian keuangan
+  const regCut = (s.settings.regFee ?? 200_000) - regFee
   const needsData = !me.profileDone
 
   return (
@@ -373,6 +374,7 @@ export function Tahapan() {
 
         <Step n={3} title={`Bayar pendaftaran ${rupiah(regFee)}`} state={needsData ? 'next' : st(1)}>
           {reg.stage === 'bayar_daftar' || reg.stage === 'data' ? <>
+            {regCut > 0 && <p className="mb-2 rounded-lg bg-sky-50 p-2 text-sm text-sky-900">Anda mendapat potongan biaya pendaftaran {rupiah(regCut)} dari bagian keuangan.</p>}
             <p className="text-sm">Transfer tepat <b>{rupiah(regFee)}</b>, lalu unggah bukti. Tanpa bukti pembayaran, ujian online belum bisa dibuka.</p>
             <Bank />
             <PaymentState reg={reg} kind="pendaftaran" />

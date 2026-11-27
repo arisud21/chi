@@ -1,14 +1,14 @@
-import { IconArrowLeft, IconCheck, IconFileSpreadsheet, IconPlayerPlay, IconTrash, IconX } from '@tabler/icons-react'
+import { IconArrowLeft, IconCheck, IconCopy, IconFileSpreadsheet, IconPlayerPlay, IconTrash, IconUserPlus, IconX } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ask, Badge, Empty, Field, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct, useToast } from '../../components/ui'
 import { AngkatanFilter, angkatanKe, cocokAngkatan, useAngkatan } from '../../lib/angkatan'
-import { DOC_KINDS, DOC_LABEL, assignBatch, cancelRegistration, changeProgram, deletePeserta, docsComplete, issueNip, remindProfile, rejectPayment, removeDocument, resumeRegistrationAdmin, saveProfileAsAdmin, setFollowUp, useStore, verifyPayment } from '../../lib/store'
+import { DOC_KINDS, DOC_LABEL, assignBatch, cancelRegistration, changeProgram, createPendaftar, deletePeserta, type PendaftarCreated, type PendaftarInput, docsComplete, issueNip, remindProfile, rejectPayment, removeDocument, resumeRegistrationAdmin, saveProfileAsAdmin, setFollowUp, useStore, verifyPayment } from '../../lib/store'
 import type { Registration } from '../../lib/types'
-import { billMessage } from '../../lib/billing'
+import { billMessage, regFeeFor } from '../../lib/billing'
 import { WaButton, stageMessage, withdrawnMessage } from '../../lib/wa'
 import { INTERNSHIP_LABEL, ProfileForm, infoSourceText } from '../peserta/DataDiri'
-import { Tagihan } from './Tagihan'
+import { DiscountChip, Tagihan } from './Tagihan'
 import { PesertaActions } from './PesertaTools'
 import { buildXlsx, downloadBlob, type Cell } from '../../lib/xlsx'
 import { exportBuktiPenerimaanXlsx } from '../../lib/exportKeuangan'
@@ -149,7 +149,8 @@ function RekapBayarDaftar() {
   const regs = liveRegs.filter((r) => cocokAngkatan(angkatan, angkatanKe(s, r)))
   const paidIds = new Set(s.payments.filter((p) => p.kind === 'pendaftaran' && p.status === 'verified').map((p) => p.registrationId))
   const waitingIds = new Set(s.payments.filter((p) => p.kind === 'pendaftaran' && p.status === 'submitted').map((p) => p.registrationId))
-  const isFree = (r: Registration) => !paidIds.has(r.id) && !!s.batches.find((b) => b.id === r.batchId)?.freeRegFee
+  // Tidak wajib membayar: angkatannya dibebaskan atau biaya pendaftarannya dipotong seluruhnya oleh keuangan.
+  const isFree = (r: Registration) => !paidIds.has(r.id) && regFeeFor(s, r) === 0
   const free = regs.filter(isFree).length
   const paid = regs.filter((r) => paidIds.has(r.id)).length
   const owing = regs.length - free // pendaftar yang memang wajib membayar biaya pendaftaran
@@ -184,7 +185,7 @@ function RekapBayarDaftar() {
       </div>
       <div className="card mt-4 p-5" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Persentase pendaftar yang sudah membayar pendaftaran">
         <div className="h-3 overflow-hidden rounded-full bg-canvas"><div className="h-full rounded-full bg-emerald-500" style={{ width: pct + '%' }} /></div>
-        <p className="mt-2 text-sm text-muted">{pct}% pendaftar{angkatan === 'none' ? ' yang belum punya angkatan' : angkatan !== 'all' ? ` angkatan ${angkatan}` : ''} sudah membayar. Pendaftar yang dibatalkan atau kedaluwarsa tidak dihitung{free ? `, begitu juga ${free} pendaftar di angkatan yang dibebaskan dari biaya pendaftaran` : ''}.</p>
+        <p className="mt-2 text-sm text-muted">{pct}% pendaftar{angkatan === 'none' ? ' yang belum punya angkatan' : angkatan !== 'all' ? ` angkatan ${angkatan}` : ''} sudah membayar. Pendaftar yang dibatalkan atau kedaluwarsa tidak dihitung{free ? `, begitu juga ${free} pendaftar yang dibebaskan dari biaya pendaftaran (angkatan bebas biaya atau dipotong seluruhnya)` : ''}.</p>
       </div>
 
       <div className="mb-4 mt-6 flex flex-wrap gap-3">
@@ -199,7 +200,7 @@ function RekapBayarDaftar() {
           {shown.map(({ r, user, state, pay, sub }) => (
             <tr key={r.id}>
               <td className="font-mono text-xs font-semibold">{r.code}</td>
-              <td className="font-semibold">{user?.name}</td>
+              <td><p className="font-semibold">{user?.name}</p><DiscountChip regId={r.id} /></td>
               <td>{s.programs.find((p) => p.id === r.programId)?.title}</td>
               <td>{dateID(r.createdAt)}</td>
               <td><span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${FEE_LABEL[state].cls}`}>{FEE_LABEL[state].label}</span>{state === 'verified' && pay?.receiptNo && <span className="mt-1 block font-mono text-xs text-muted">{pay.receiptNo}</span>}</td>
@@ -299,6 +300,83 @@ export function HapusPesertaModal({ userId, onClose }: { userId: string | null; 
   )
 }
 
+const EMPTY_PENDAFTAR: PendaftarInput = { name: '', email: '', phone: '', nik: '', birthDate: '', programId: '', password: '' }
+
+/**
+ * Admin menambah pendaftar baru untuk calon yang kesulitan membuat akun sendiri. Pendaftar mengikuti tahapan yang sama dengan
+ * daftar sendiri (isi data diri, bayar pendaftaran, ujian, dan seterusnya). Setelah tersimpan, data masuk ditampilkan sekali
+ * agar admin bisa menyampaikannya lewat WhatsApp.
+ */
+function TambahPendaftar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const s = useStore((x) => x)
+  const toast = useToast()
+  const programs = s.programs.filter((p) => p.active && !p.archived)
+  const [f, setF] = useState<PendaftarInput>(EMPTY_PENDAFTAR)
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<(PendaftarCreated & { name: string; phone: string; program: string }) | null>(null)
+  const close = () => { setF(EMPTY_PENDAFTAR); setDone(null); onClose() }
+  const submit = async () => {
+    setBusy(true)
+    const res = await createPendaftar(f)
+    setBusy(false)
+    if (!res.ok) return toast(res.error, 'err')
+    setDone({ ...(res.data as PendaftarCreated), name: f.name, phone: f.phone, program: programs.find((p) => p.id === f.programId)?.title ?? '' })
+    setF(EMPTY_PENDAFTAR)
+  }
+  const loginUrl = `${window.location.origin}/masuk`
+  const message = done ? [
+    `Halo ${done.name.split(' ')[0]}, akun pendaftaran Anda di Cimahi Hotel Institute sudah kami buatkan untuk pelatihan ${done.program} (nomor registrasi ${done.code}).`,
+    '', `Masuk di: ${loginUrl}`, `Email: ${done.email}`, `Password awal: ${done.password}`, '',
+    'Saat pertama masuk Anda diminta mengganti password. Setelah itu lengkapi data diri, lalu ikuti tahapan pendaftaran di aplikasi.',
+  ].join('\n') : ''
+  const copy = async () => { await navigator.clipboard.writeText(message).then(() => toast('Pesan disalin.'), () => toast('Gagal menyalin. Salin manual dari kotak di atas.', 'err')) }
+
+  return (
+    <Modal open={open} title={done ? 'Pendaftar ditambahkan' : 'Tambah pendaftar'} onClose={close}>
+      {done ? (
+        <div className="space-y-4 text-sm">
+          <p className="rounded-lg bg-emerald-50 p-3 text-emerald-900"><b>{done.name}</b> terdaftar dengan nomor <b className="font-mono">{done.code}</b> dan berada di tahap isi data diri.</p>
+          <div>
+            <p className="label">Data masuk untuk pendaftar</p>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-line p-3">
+              <dt className="text-muted">Email</dt><dd className="font-mono">{done.email}</dd>
+              <dt className="text-muted">Password awal</dt><dd className="font-mono font-bold">{done.password}</dd>
+            </dl>
+            <p className="mt-1 text-xs text-amber-800">Password ini hanya ditampilkan sekarang. Sampaikan ke pendaftar; ia wajib menggantinya saat pertama masuk.</p>
+          </div>
+          <textarea className="input !py-2 text-xs" rows={7} readOnly value={message} aria-label="Pesan untuk pendaftar" />
+          <div className="flex flex-wrap gap-2">
+            <WaButton phone={done.phone} label="Kirim lewat WhatsApp" text={message} />
+            <button type="button" className="btn-ghost" onClick={copy}><IconCopy size={18} />Salin pesan</button>
+            <button type="button" className="btn-ghost" onClick={() => setDone(null)}><IconUserPlus size={18} />Tambah lagi</button>
+            <button type="button" className="btn-primary" onClick={close}>Selesai</button>
+          </div>
+        </div>
+      ) : (
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); submit() }}>
+          <p className="rounded-lg bg-canvas p-3 text-xs text-muted">Untuk calon yang kesulitan membuat akun sendiri. Pendaftar mengikuti tahapan yang sama dengan pendaftaran mandiri: melengkapi data diri, membayar biaya pendaftaran, lalu ujian online.</p>
+          <Field label="Nama lengkap"><input className="input" required maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Email" hint="Dipakai pendaftar untuk masuk."><input className="input" type="email" required maxLength={160} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+            <Field label="No HP / WhatsApp" hint="Untuk mengirim data masuk."><input className="input" type="tel" inputMode="tel" maxLength={30} placeholder="08…" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
+            <Field label="NIK" hint="16 digit sesuai KTP."><input className="input font-mono" required inputMode="numeric" pattern="\d{16}" maxLength={16} value={f.nik} onChange={(e) => setF({ ...f, nik: e.target.value.replace(/\D/g, '') })} /></Field>
+            <Field label="Tanggal lahir"><input className="input" type="date" required value={f.birthDate} onChange={(e) => setF({ ...f, birthDate: e.target.value })} /></Field>
+          </div>
+          <Field label="Jenis pelatihan">
+            <select className="input" required value={f.programId} onChange={(e) => setF({ ...f, programId: e.target.value })}>
+              <option value="">Pilih pelatihan</option>{programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+            </select>
+          </Field>
+          <Field label="Password awal (opsional)" hint="Kosongkan agar dibuat otomatis. Pendaftar wajib menggantinya saat pertama masuk.">
+            <input className="input" minLength={8} maxLength={100} autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+          </Field>
+          <button className="btn-primary w-full" disabled={busy}>{busy ? 'Menyimpan…' : 'Tambah pendaftar'}</button>
+        </form>
+      )}
+    </Modal>
+  )
+}
+
 /** Rekap semua pendaftar: yang masih dalam tahapan, yang sudah registrasi ulang, yang mundur, dan yang tidak lulus. */
 function TahapanPendaftar() {
   const s = useStore((x) => x)
@@ -312,6 +390,7 @@ function TahapanPendaftar() {
   const [reason, setReason] = useState('')
   const [hapus, setHapus] = useState<string | null>(null)
   const [belumFu, setBelumFu] = useState(false) // hanya pendaftar mundur yang belum di-follow up
+  const [tambah, setTambah] = useState(false)
   const canManage = ['super_admin', 'admin_pendaftaran'].includes(me.role)
   const seeData = ['super_admin', 'admin_pendaftaran', 'akademik'].includes(me.role)
   const [angkatan, setAngkatan] = useAngkatan()
@@ -339,7 +418,11 @@ function TahapanPendaftar() {
   return (
     <>
       <PageHeader title="Pendaftar" sub="Rekap semua pendaftar, termasuk yang sudah registrasi ulang, mundur, atau tidak lulus. Klik status untuk memfilter."
-        action={<button className="btn-ghost" disabled={!rows.length} onClick={exportExcel}><IconFileSpreadsheet size={18} />Ekspor Excel</button>} />
+        action={<div className="flex flex-wrap gap-2">
+          <button className="btn-ghost" disabled={!rows.length} onClick={exportExcel}><IconFileSpreadsheet size={18} />Ekspor Excel</button>
+          {canManage && <button className="btn-primary" onClick={() => setTambah(true)}><IconUserPlus size={18} />Tambah pendaftar</button>}
+        </div>} />
+      <TambahPendaftar open={tambah} onClose={() => setTambah(false)} />
       <div className="mb-4 flex flex-wrap gap-2" aria-label="Filter status">
         {chip('all', 'Semua', all.length)}
         {REKAP.map(([k, label]) => chip(k, label, count(k)))}

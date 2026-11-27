@@ -34,8 +34,12 @@ const rp = (n) => 'Rp' + Number(n).toLocaleString('id-ID')
 export async function afterProfileDone(c, userId) {
   const regs = await cq(c, "SELECT id FROM registrations WHERE user_id = ? AND stage = 'data' FOR UPDATE", [userId])
   if (!regs.length) return
-  // Biaya pendaftaran yang sudah dicatat keuangan sebelum data diri lengkap: tahap pembayaran dilewati, langsung ke ujian tulis.
-  const prepaid = await cq(c, "SELECT DISTINCT registration_id id FROM payments WHERE registration_id IN (?) AND kind = 'pendaftaran' AND status = 'verified'", [regs.map((r) => r.id)])
+  // Biaya pendaftaran yang sudah dicatat keuangan sebelum data diri lengkap, atau dihapus seluruhnya oleh potongan:
+  // tahap pembayaran dilewati, langsung ke ujian tulis.
+  const fee = Number((await getSettings(c)).regFee ?? REG_FEE_DEFAULT)
+  const ids = regs.map((r) => r.id)
+  const prepaid = await cq(c, `SELECT DISTINCT registration_id id FROM payments WHERE registration_id IN (?) AND kind = 'pendaftaran' AND status = 'verified'
+    UNION SELECT registration_id id FROM registration_discounts WHERE registration_id IN (?) AND target = 'pendaftaran' AND amount >= ?`, [ids, ids, fee])
   if (prepaid.length) {
     await cq(c, "UPDATE registrations SET stage = 'ujian' WHERE id IN (?)", [prepaid.map((r) => r.id)])
     await notify(c, userId, 'Data diri lengkap: ujian online terbuka', 'Biaya pendaftaran Anda sudah tercatat lunas. Buka menu Ujian online; token diberikan otomatis oleh sistem saat jadwal ujian dibuka dan berlaku 1 hari.', '/app/ujian')
@@ -267,10 +271,13 @@ export async function paidOffIds(c, ids) {
   const sql = `SELECT r.id, r.source, COALESCE(b.free_reg_fee, 0) free,
     (SELECT COUNT(*) FROM installments i WHERE i.registration_id = r.id) ni,
     (SELECT COALESCE(SUM(i.amount - i.paid_amount), 0) FROM installments i WHERE i.registration_id = r.id) rest,
-    (SELECT COUNT(*) FROM payments p WHERE p.registration_id = r.id AND p.kind = 'pendaftaran' AND p.status = 'verified') regfee
+    (SELECT COUNT(*) FROM payments p WHERE p.registration_id = r.id AND p.kind = 'pendaftaran' AND p.status = 'verified') regfee,
+    (SELECT COALESCE(SUM(d.amount), 0) FROM registration_discounts d WHERE d.registration_id = r.id AND d.target = 'pendaftaran') dreg
     FROM registrations r LEFT JOIN batches b ON b.id = r.batch_id WHERE r.id IN (?)`
   const rows = c ? await cq(c, sql, [ids]) : await q(sql, [ids])
-  return new Set(rows.filter((x) => Number(x.ni) > 0 && Number(x.rest) <= 0 && (x.source !== 'admin' || Number(x.free) || Number(x.regfee) > 0)).map((x) => x.id))
+  const fee = Number((await getSettings(c)).regFee ?? REG_FEE_DEFAULT)
+  // Biaya pendaftaran yang seluruhnya dipotong dianggap lunas, sama seperti angkatan bebas biaya.
+  return new Set(rows.filter((x) => Number(x.ni) > 0 && Number(x.rest) <= 0 && (x.source !== 'admin' || Number(x.free) || Number(x.regfee) > 0 || Number(x.dreg) >= fee)).map((x) => x.id))
 }
 export const isFullyPaid = async (c, regId) => (await paidOffIds(c, [regId])).has(regId)
 
@@ -405,6 +412,63 @@ export async function gradeLetterScale() {
 export const GRADE_LETTERS = ['A', 'AB', 'B', 'BC', 'C', 'CD', 'D']
 export const letterOf = (score, scale) => { const i = scale.findIndex((m) => score >= m); return i < 0 ? 'E' : GRADE_LETTERS[i] }
 
+/* ---------- potongan biaya per pendaftar ---------- */
+const run = (c, sql, p) => (c ? cq(c, sql, p) : q(sql, p))
+
+/** Jumlah potongan satu registrasi: reg = potongan biaya pendaftaran, other = potongan biaya pelatihan dan biaya tambahan. */
+export async function discountsOf(c, regId) {
+  const rows = await run(c, 'SELECT target, amount FROM registration_discounts WHERE registration_id = ?', [regId])
+  const reg = rows.filter((x) => x.target === 'pendaftaran').reduce((t, x) => t + Number(x.amount), 0)
+  return { reg, other: rows.reduce((t, x) => t + Number(x.amount), 0) - reg }
+}
+
+/** Biaya pendaftaran yang harus dibayar satu registrasi: tarif umum dikurangi potongannya (0 untuk angkatan bebas biaya). */
+export async function regFeeDue(c, r, s) {
+  if (r.batch_id) { const [b] = await run(c, 'SELECT free_reg_fee FROM batches WHERE id = ?', [r.batch_id]); if (b?.free_reg_fee) return 0 }
+  const { reg } = await discountsOf(c, r.id)
+  return Math.max(0, Number(s.regFee ?? REG_FEE_DEFAULT) - reg)
+}
+
+/**
+ * Pengurang total biaya registrasi (yang dicicil): biaya pendaftaran yang sudah dibayar, potongan biaya pelatihan dan biaya tambahan,
+ * serta potongan biaya pendaftaran bila biaya pendaftarannya ikut diperhitungkan (sudah dibayar, atau seluruhnya dipotong).
+ * Total yang dibayar peserta selalu = biaya pelatihan + biaya tambahan - semua potongan.
+ */
+export async function scheduleCredit(c, r, s) {
+  const [{ credit }] = await run(c, "SELECT COALESCE(SUM(amount_paid), 0) credit FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified'", [r.id])
+  const d = await discountsOf(c, r.id)
+  const counted = Number(credit) > 0 || (d.reg > 0 && d.reg >= Number(s.regFee ?? REG_FEE_DEFAULT))
+  return Number(credit) + d.other + (counted ? d.reg : 0)
+}
+
+/**
+ * Terapkan perubahan total biaya registrasi ke jadwal cicilan yang sudah ada. delta < 0 (potongan bertambah) memotong
+ * bagian yang belum dibayar mulai dari termin terakhir; delta > 0 (potongan berkurang) ditambahkan ke termin terakhir.
+ */
+export async function applyScheduleDelta(c, regId, delta) {
+  if (!delta) return
+  const insts = await cq(c, 'SELECT * FROM installments WHERE registration_id = ? ORDER BY seq DESC FOR UPDATE', [regId])
+  if (!insts.length) return // belum ada jadwal: potongan dihitung saat paket dipilih
+  const set = async (i, amount) => {
+    const paid = Number(i.paid_amount)
+    const status = paid >= amount ? 'paid' : paid > 0 ? 'partial' : 'unpaid'
+    await cq(c, 'UPDATE installments SET amount = ?, status = ? WHERE id = ?', [amount, status, i.id])
+  }
+  if (delta > 0) return set(insts[0], Number(insts[0].amount) + delta)
+  const [r] = await cq(c, 'SELECT stage FROM registrations WHERE id = ?', [regId])
+  let need = -delta
+  for (const i of insts) {
+    if (need <= 0) break
+    // Termin registrasi ulang harus tetap ada nominalnya selama peserta belum aktif, karena pembayarannya yang mengaktifkan peserta.
+    const floor = Math.max(Number(i.paid_amount), i.seq === 1 && r?.stage === 'registrasi_ulang' ? 1 : 0)
+    const take = Math.min(need, Number(i.amount) - floor)
+    if (take <= 0) continue
+    await set(i, Number(i.amount) - take)
+    need -= take
+  }
+  if (need > 0) fail(`Potongan melebihi sisa tagihan yang belum dibayar (kurang Rp${need.toLocaleString('id-ID')}). Kurangi nominal potongannya.`)
+}
+
 /** Sisa seluruh termin yang belum terbayar. */
 export async function remainingTotal(c, regId) {
   const sql = 'SELECT COALESCE(SUM(amount - paid_amount), 0) rest FROM installments WHERE registration_id = ?'
@@ -439,7 +503,8 @@ async function outstanding(c, r, s) {
   const dayTxt = (d) => new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
   if (r.stage === 'bayar_daftar') {
     const [sub] = await cq(c, "SELECT id FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'submitted' LIMIT 1", [r.id])
-    if (!sub) lines.push(`Biaya pendaftaran ${rpTxt(s.regFee ?? REG_FEE_DEFAULT)}`)
+    const due = await regFeeDue(c, r, s)
+    if (!sub && due > 0) lines.push(`Biaya pendaftaran ${rpTxt(due)}`)
   }
   if (r.stage === 'registrasi_ulang') {
     const insts = await cq(c, "SELECT * FROM installments WHERE registration_id = ? AND status = 'unpaid' ORDER BY seq", [r.id])
@@ -451,9 +516,9 @@ async function outstanding(c, r, s) {
   if (r.stage === 'aktif') {
     // Peserta didik yang ditambahkan admin: biaya pendaftaran ditagih kecuali angkatannya dibebaskan; paket ditetapkan keuangan.
     if (r.source === 'admin') {
-      const [b] = r.batch_id ? await cq(c, 'SELECT free_reg_fee FROM batches WHERE id = ?', [r.batch_id]) : []
       const [paidReg] = await cq(c, "SELECT id FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified' LIMIT 1", [r.id])
-      if (!b?.free_reg_fee && !paidReg) lines.push(`Biaya pendaftaran ${rpTxt(s.regFee ?? REG_FEE_DEFAULT)}`)
+      const due = await regFeeDue(c, r, s) // 0 bila angkatannya dibebaskan atau seluruhnya dipotong
+      if (due > 0 && !paidReg) lines.push(`Biaya pendaftaran ${rpTxt(due)}`)
       const [any] = await cq(c, 'SELECT id FROM installments WHERE registration_id = ? LIMIT 1', [r.id])
       if (!any) lines.push('Biaya registrasi (paket pembayaran sedang ditetapkan bagian keuangan)')
     }
@@ -534,10 +599,9 @@ export const admissionActions = {
       if (!plan) fail('Paket pembayaran tidak tersedia.')
       const [p] = await cq(c, 'SELECT price FROM programs WHERE id = ?', [r.program_id])
       const s = await getSettings(c)
-      // Total = biaya program + biaya tambahan aktif, dikurangi biaya pendaftaran yang sudah dikonfirmasi.
+      // Total = biaya program + biaya tambahan aktif, dikurangi biaya pendaftaran yang sudah dikonfirmasi dan potongan dari keuangan.
       const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [r.program_id, r.user_id])
-      const [{ credit }] = await cq(c, "SELECT COALESCE(SUM(amount_paid), 0) credit FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified'", [r.id])
-      const total = Math.max(0, Number(p.price) + Number(extra) - Number(credit))
+      const total = Math.max(0, Number(p.price) + Number(extra) - await scheduleCredit(c, r, s))
       if (total <= 0) fail('Biaya pelatihan sudah tercukupi oleh biaya pendaftaran. Hubungi bagian keuangan.')
       const sched = buildSchedule(total, plan, s.reenrollDue || new Date().toISOString().slice(0, 10), s.pelunasanDue || s.reenrollDue || new Date().toISOString().slice(0, 10))
       await cq(c, 'DELETE FROM installments WHERE registration_id = ?', [r.id])

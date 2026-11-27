@@ -1,12 +1,12 @@
-import { IconArrowLeft, IconBellRinging, IconCheck, IconDownload, IconFileText, IconX } from '@tabler/icons-react'
+import { IconArrowLeft, IconBellRinging, IconCheck, IconDiscount, IconDownload, IconFileText, IconPencil, IconTrash, IconX } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Badge, Empty, Field, KIND_LABEL, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct, useToast } from '../../components/ui'
-import { billMessage, itemsFor, shortfallOf, summarize, type Summary } from '../../lib/billing'
+import { billMessage, discountsFor, itemsFor, regFeeFor, shortfallOf, summarize, type Summary } from '../../lib/billing'
 import { exportPesertaDidikXlsx, exportRincianSiswaXlsx } from '../../lib/exportKeuangan'
 import { AngkatanFilter, angkatanKe, cocokAngkatan, useAngkatan } from '../../lib/angkatan'
 import { WaButton } from '../../lib/wa'
-import { cancelManualPayment, recordPayment, recordRegFee, rejectPayment, remindPayment, setPlanAdmin, useStore, verifyPayment } from '../../lib/store'
+import { cancelManualPayment, deleteDiscount, recordPayment, recordRegFee, rejectPayment, remindPayment, saveDiscount, setPlanAdmin, useStore, verifyPayment } from '../../lib/store'
 
 const FILTERS: [Summary | 'all', string][] = [['all', 'Semua'], ['due', 'Ada tagihan'], ['confirm', 'Menunggu konfirmasi'], ['paid', 'Lunas'], ['later', 'Belum jatuh tempo']]
 
@@ -71,7 +71,8 @@ export function Tagihan({ onlyActive = false }: { onlyActive?: boolean }) {
           {shown.map(({ r, user, prog, total, paid, rest, status }) => (
             <tr key={r.id}>
               <td><p className="font-semibold">{user!.name}</p><p className="font-mono text-xs text-muted">{r.code}</p>
-                {r.source === 'admin' && <p className="text-xs font-semibold text-brass-600">Impor · dicatat keuangan{s.batches.find((b) => b.id === r.batchId)?.freeRegFee ? ' · bebas biaya pendaftaran' : ''}</p>}</td>
+                {r.source === 'admin' && <p className="text-xs font-semibold text-brass-600">Impor · dicatat keuangan{s.batches.find((b) => b.id === r.batchId)?.freeRegFee ? ' · bebas biaya pendaftaran' : ''}</p>}
+                <DiscountChip regId={r.id} /></td>
               <td>{prog?.title}</td>
               <td className="tabular-nums">{rupiah(total)}</td>
               <td className="tabular-nums text-emerald-700">{rupiah(paid)}</td>
@@ -110,14 +111,21 @@ export function RincianBayar() {
   const openTotal = openItems.reduce((t, i) => t + (i.amount ?? 0), 0)
   const today = new Date().toISOString().slice(0, 10)
 
-  // Dari apa total terdiri: biaya program + biaya tambahan - biaya pendaftaran (yang dicicil).
-  const regFee = s.settings.regFee ?? 200000
+  // Dari apa total terdiri: biaya program + biaya tambahan - potongan - biaya pendaftaran (yang dicicil). Rumus sama dengan server.
+  const regDue = regFeeFor(s, r)
   const extras = s.feeItems.filter((x) => x.active && (x.userId ? x.userId === r.userId : (!x.programId || x.programId === r.programId)))
   const price = prog?.price ?? r.priceSnapshot
-  const credit = items[0]?.state === 'paid' ? (items[0].amount ?? 0) : 0
+  const credit = s.payments.filter((p) => p.registrationId === r.id && p.kind === 'pendaftaran' && p.status === 'verified').reduce((t, p) => t + p.amountPaid, 0)
+  const cuts = discountsFor(s, r.id)
+  const otherCuts = cuts.filter((d) => d.target !== 'pendaftaran')
+  const regCut = cuts.filter((d) => d.target === 'pendaftaran').reduce((t, d) => t + d.amount, 0)
+  // Biaya pendaftaran mengurangi cicilan bila sudah dibayar, atau (pendaftar biasa) diperkirakan akan dibayar sebelum paket dipilih.
+  const regLine = batch?.freeRegFee ? 0 : credit || (r.source === 'admin' ? 0 : regDue)
+  const regCutLine = credit > 0 || regDue === 0 || r.source !== 'admin' ? regCut : 0
   const installTotal = s.installments.filter((i) => i.registrationId === r.id).reduce((t, i) => t + i.amount, 0)
   const hasSchedule = installTotal > 0
-  const expectedSchedule = Math.max(0, price + extras.reduce((t, x) => t + x.amount, 0) - (batch?.freeRegFee ? 0 : credit || (r.source === 'admin' ? 0 : regFee)))
+  const grand = price + extras.reduce((t, x) => t + x.amount, 0)
+  const expectedSchedule = Math.max(0, grand - otherCuts.reduce((t, d) => t + d.amount, 0) - regLine - regCutLine)
   const drifted = hasSchedule && installTotal !== expectedSchedule
 
   return (
@@ -181,16 +189,21 @@ export function RincianBayar() {
       </div>
 
       {r.source === 'admin' && <PencatatanKeuangan regId={r.id} />}
+      <PotonganBiaya regId={r.id} />
 
       <section className="card mt-6 p-5">
         <h2 className="font-bold">Dari apa total ini terdiri</h2>
         <dl className="mt-3 max-w-xl space-y-1.5 text-sm">
           <div className="flex justify-between gap-3"><dt>Biaya pelatihan {prog?.title}</dt><dd className="tabular-nums">{rupiah(price)}</dd></div>
           {extras.map((x) => <div key={x.id} className="flex justify-between gap-3"><dt>{x.name}</dt><dd className="tabular-nums">{rupiah(x.amount)}</dd></div>)}
-          <div className="flex justify-between gap-3 border-t border-line pt-1.5 font-semibold"><dt>Total keseluruhan</dt><dd className="tabular-nums">{rupiah(price + extras.reduce((t, x) => t + x.amount, 0))}</dd></div>
+          <div className="flex justify-between gap-3 border-t border-line pt-1.5 font-semibold"><dt>Total keseluruhan</dt><dd className="tabular-nums">{rupiah(grand)}</dd></div>
+          {otherCuts.map((d) => <div key={d.id} className="flex justify-between gap-3 text-sky-800"><dt>Potongan {d.label.toLowerCase()}</dt><dd className="tabular-nums">- {rupiah(d.amount)}</dd></div>)}
           {batch?.freeRegFee
             ? <div className="flex justify-between gap-3"><dt>Biaya pendaftaran dibebaskan untuk angkatan {batch.code} (tidak mengurangi biaya registrasi)</dt><dd className="tabular-nums">- {rupiah(0)}</dd></div>
-            : <div className="flex justify-between gap-3"><dt>Dikurangi biaya pendaftaran{credit ? '' : ' (belum dibayar)'}</dt><dd className="tabular-nums">- {rupiah(credit || regFee)}</dd></div>}
+            : <>
+              {regLine > 0 && <div className="flex justify-between gap-3"><dt>Dikurangi biaya pendaftaran{credit ? '' : ' (belum dibayar)'}</dt><dd className="tabular-nums">- {rupiah(regLine)}</dd></div>}
+              {regCutLine > 0 && <div className="flex justify-between gap-3 text-sky-800"><dt>Potongan biaya pendaftaran</dt><dd className="tabular-nums">- {rupiah(regCutLine)}</dd></div>}
+            </>}
           <div className="flex justify-between gap-3 border-t border-line pt-1.5 font-bold"><dt>Dicicil saat registrasi ulang</dt><dd className="tabular-nums text-brand-700">{rupiah(hasSchedule ? installTotal : expectedSchedule)}</dd></div>
         </dl>
         {drifted && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">Jadwal cicilan peserta ini dihitung dengan biaya saat ia memilih paket. Biaya program atau biaya tambahan sudah berubah sejak itu, sehingga total di atas berbeda dari jadwalnya.</p>}
@@ -217,14 +230,15 @@ function PencatatanKeuangan({ regId }: { regId: string }) {
   const instPaid = pays.some((p) => p.installmentId && (p.status === 'verified' || p.status === 'submitted'))
   const manual = pays.filter((p) => p.note && p.status === 'verified').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const plans = s.plans.filter((p) => p.active && (!p.programId || p.programId === r.programId))
-  const needReg = !batch?.freeRegFee && !regPaid
+  const regDue = regFeeFor(s, r) // 0 bila angkatannya dibebaskan atau dipotong seluruhnya
+  const needReg = regDue > 0 && !regPaid
   const restReg = insts.reduce((t, i) => t + i.amount - i.paidAmount, 0)
   const [planId, setPlanId] = useState('')
   const [f, setF] = useState({ kind: (needReg && !insts.length ? 'pendaftaran' : 'registrasi') as 'pendaftaran' | 'registrasi', amount: 0, transferDate: today, payerName: '', note: '' })
   const [cancel, setCancel] = useState<string | null>(null)
   const [why, setWhy] = useState('')
   if (!me || !['super_admin', 'admin_keuangan'].includes(me.role)) return null
-  const kinds = [...(needReg && !insts.length ? [['pendaftaran', `Biaya pendaftaran (${rupiah(s.settings.regFee ?? 200000)})`] as const] : []), ...(insts.length && restReg > 0 ? [['registrasi', `Biaya registrasi (sisa ${rupiah(restReg)})`] as const] : [])]
+  const kinds = [...(needReg && !insts.length ? [['pendaftaran', `Biaya pendaftaran (${rupiah(regDue)})`] as const] : []), ...(insts.length && restReg > 0 ? [['registrasi', `Biaya registrasi (sisa ${rupiah(restReg)})`] as const] : [])]
   const kind = kinds.some(([k]) => k === f.kind) ? f.kind : kinds[0]?.[0]
   return (
     <section className="card mt-6 p-5" aria-labelledby="catat">
@@ -298,7 +312,7 @@ function CatatBiayaPendaftaran({ regId }: { regId: string }) {
   const r = s.registrations.find((x) => x.id === regId)!
   const user = s.users.find((u) => u.id === r.userId)
   const batch = s.batches.find((b) => b.id === r.batchId)
-  const fee = s.settings.regFee ?? 200_000
+  const fee = regFeeFor(s, r) // sudah dikurangi potongan biaya pendaftaran
   const today = new Date(Date.now() + 7 * 3_600_000).toISOString().slice(0, 10) // tanggal WIB, sama dengan validasi server
   const pays = s.payments.filter((p) => p.registrationId === r.id && p.kind === 'pendaftaran')
   const manual = pays.filter((p) => p.status === 'verified' && p.note && !p.proofFileId)
@@ -317,6 +331,7 @@ function CatatBiayaPendaftaran({ regId }: { regId: string }) {
   const blocked = !live ? 'Pendaftaran ini sudah tidak berjalan (mundur atau kedaluwarsa).'
     : batch?.freeRegFee ? `Angkatan ${batch.code} dibebaskan dari biaya pendaftaran, jadi tidak perlu dicatat.`
     : verified ? null
+    : fee === 0 ? 'Biaya pendaftaran sudah dipotong seluruhnya, jadi tidak perlu dicatat.'
     : pending ? 'Pendaftar sudah mengunggah bukti pembayaran. Setujui atau tolak bukti di atas.'
     : imported && hasPlan ? 'Paket biaya registrasi peserta ini sudah ditetapkan tanpa potongan biaya pendaftaran, jadi biaya pendaftaran tidak bisa dicatat lagi agar tagihannya tidak terhitung dua kali.'
     : !imported && !['data', 'bayar_daftar'].includes(r.stage) ? 'Pendaftar sudah melewati tahap pembayaran pendaftaran.'
@@ -369,6 +384,104 @@ function CatatBiayaPendaftaran({ regId }: { regId: string }) {
   )
 }
 
+/** Penanda kecil di daftar: pendaftar ini mendapat potongan biaya. */
+export function DiscountChip({ regId }: { regId: string }) {
+  const total = useStore((x) => x.discounts.filter((d) => d.registrationId === regId).reduce((t, d) => t + d.amount, 0))
+  if (!total) return null
+  return <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-800 ring-1 ring-inset ring-sky-200"><IconDiscount size={12} />Potongan {rupiah(total)}</span>
+}
+
+interface CutForm { editing: boolean; target: string; mode: 'rp' | 'persen'; value: number; reason: string }
+
+/**
+ * Potongan biaya untuk satu pendaftar (bagian keuangan): biaya pendaftaran, biaya pelatihan, atau biaya tambahan yang berlaku untuknya.
+ * Satu potongan per jenis biaya. Jadwal cicilan yang sudah ada langsung disesuaikan server, dan pendaftar mendapat notifikasi.
+ */
+function PotonganBiaya({ regId }: { regId: string }) {
+  const s = useStore((x) => x)
+  const act = useAct()
+  const [f, setF] = useState<CutForm | null>(null)
+  const [del, setDel] = useState<{ target: string; label: string } | null>(null)
+  const me = s.users.find((u) => u.id === s.sessionUserId)
+  const r = s.registrations.find((x) => x.id === regId)
+  if (!r || !me || !['super_admin', 'admin_keuangan'].includes(me.role)) return null
+  const prog = s.programs.find((p) => p.id === r.programId)
+  const batch = s.batches.find((b) => b.id === r.batchId)
+  const cuts = discountsFor(s, r.id)
+  const regPaid = s.payments.some((p) => p.registrationId === r.id && p.kind === 'pendaftaran' && p.status === 'verified')
+  const pending = s.payments.some((p) => p.registrationId === r.id && p.status === 'submitted')
+  const live = ['pending_payment', 'waiting_verification', 'active'].includes(r.status)
+  const extras = s.feeItems.filter((x) => x.active && (x.userId ? x.userId === r.userId : (!x.programId || x.programId === r.programId)))
+  // Biaya yang bisa dipotong beserta nominal penuhnya (batas potongan).
+  const targets = [
+    ...(!batch?.freeRegFee && (!regPaid || cuts.some((d) => d.target === 'pendaftaran')) ? [{ key: 'pendaftaran', label: 'Biaya pendaftaran', base: s.settings.regFee ?? 200_000 }] : []),
+    { key: 'pelatihan', label: `Biaya pelatihan ${prog?.title ?? ''}`, base: prog?.price ?? r.priceSnapshot },
+    ...extras.map((x) => ({ key: x.id, label: x.name, base: x.amount })),
+  ]
+  const free = targets.filter((t) => !cuts.some((d) => d.target === t.key))
+  const base = f ? targets.find((t) => t.key === f.target)?.base ?? 0 : 0
+  const amount = f ? (f.mode === 'persen' ? Math.round((base * Math.min(100, f.value)) / 100) : f.value) : 0
+  const total = cuts.reduce((t, d) => t + d.amount, 0)
+  const blocked = !live ? 'Pendaftaran ini sudah tidak berjalan atau sudah selesai, jadi potongannya tidak bisa diubah.'
+    : pending ? 'Ada bukti pembayaran yang menunggu verifikasi. Setujui atau tolak dulu, lalu atur potongannya.' : null
+  const startNew = () => setF({ editing: false, target: free[0]?.key ?? '', mode: 'rp', value: 0, reason: '' })
+
+  return (
+    <section className="card mt-6 p-5" aria-labelledby="potongan">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="potongan" className="flex items-center gap-2 font-bold"><IconDiscount size={20} className="text-sky-700" />Potongan biaya</h2>
+          <p className="text-sm text-muted">Potongan untuk biaya pendaftaran, biaya pelatihan, atau biaya tambahan pendaftar ini. Tagihan dan jadwal cicilannya langsung disesuaikan, dan pendaftar mendapat notifikasi.</p>
+        </div>
+        {!blocked && free.length > 0 && <button className="btn-primary" onClick={startNew}><IconDiscount size={18} />Beri potongan</button>}
+      </div>
+      {blocked && <p className="mt-3 rounded-lg bg-canvas p-3 text-sm text-muted">{blocked}</p>}
+      {cuts.length === 0 ? <p className="mt-3 text-sm text-muted">Belum ada potongan.</p> : (
+        <ul className="mt-4 divide-y divide-line rounded-lg border border-line">
+          {cuts.map((d) => (
+            <li key={d.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-sm">
+              <span><b>{d.label}</b> · <b className="tabular-nums text-sky-800">- {rupiah(d.amount)}</b><span className="block text-xs text-muted">{d.reason} · {s.users.find((u) => u.id === d.createdBy)?.name ?? 'Keuangan'}, {dateID(d.createdAt)}</span></span>
+              {!blocked && <span className="whitespace-nowrap">
+                <button className="btn-ghost !min-h-9" aria-label={`Ubah potongan ${d.label}`} onClick={() => setF({ editing: true, target: d.target, mode: 'rp', value: d.amount, reason: d.reason })}><IconPencil size={16} />Ubah</button>
+                <button className="btn-ghost !min-h-9 text-red-700" aria-label={`Hapus potongan ${d.label}`} onClick={() => setDel({ target: d.target, label: d.label })}><IconTrash size={16} /></button>
+              </span>}
+            </li>
+          ))}
+          <li className="flex justify-between gap-3 bg-canvas px-4 py-2 text-sm font-bold"><span>Total potongan</span><span className="tabular-nums text-sky-800">- {rupiah(total)}</span></li>
+        </ul>
+      )}
+
+      <Modal open={!!f} title={f?.editing ? 'Ubah potongan biaya' : 'Beri potongan biaya'} onClose={() => setF(null)}>
+        {f && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(saveDiscount(r.id, { target: f.target, amount, reason: f.reason }), 'Potongan disimpan. Tagihan pendaftar sudah disesuaikan.', () => setF(null)) }}>
+          <Field label="Biaya yang dipotong">
+            <select className="input" required disabled={f.editing} value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })}>
+              {(f.editing ? targets.filter((t) => t.key === f.target) : free).map((t) => <option key={t.key} value={t.key}>{t.label} ({rupiah(t.base)})</option>)}
+              {f.editing && !targets.some((t) => t.key === f.target) && <option value={f.target}>{cuts.find((d) => d.target === f.target)?.label}</option>}
+            </select>
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-[auto_1fr]">
+            <Field label="Bentuk">
+              <select className="input" value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value as CutForm['mode'], value: 0 })}><option value="rp">Nominal (Rp)</option><option value="persen">Persen (%)</option></select>
+            </Field>
+            {f.mode === 'rp'
+              ? <Field label="Nominal potongan (Rp)"><MoneyInput required zeroEmpty value={f.value} onValue={(n) => setF({ ...f, value: n })} /></Field>
+              : <Field label="Persen potongan"><input className="input" type="number" min={1} max={100} required value={f.value || ''} onChange={(e) => setF({ ...f, value: Math.max(0, Math.min(100, +e.target.value || 0)) })} /></Field>}
+          </div>
+          {amount > 0 && <p className={`rounded-lg p-2 text-sm ${amount > base ? 'bg-red-50 text-red-900' : 'bg-sky-50 text-sky-900'}`}>{amount > base ? `Potongan melebihi biaya ini (${rupiah(base)}).` : `Potongan ${rupiah(amount)}, sisa biaya ${rupiah(base - amount)}.`}</p>}
+          <Field label="Alasan (wajib)" hint="Contoh: beasiswa prestasi, program kerja sama, atau keringanan dari pimpinan."><textarea className="input !py-2" rows={2} required maxLength={255} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field>
+          <button className="btn-primary w-full" disabled={!f.target || amount < 1 || amount > base}>Simpan potongan</button>
+        </form>}
+      </Modal>
+      <Modal open={!!del} title="Hapus potongan?" onClose={() => setDel(null)}>
+        {del && <div className="space-y-4">
+          <p className="text-sm">Potongan <b>{del.label}</b> dibatalkan. Tagihan dan jadwal cicilan pendaftar kembali bertambah sebesar potongan ini, dan pendaftar mendapat notifikasi.</p>
+          <div className="flex gap-2"><button className="btn-danger" onClick={() => act(deleteDiscount(r.id, del.target), 'Potongan dihapus.', () => setDel(null))}>Ya, hapus</button><button className="btn-ghost" onClick={() => setDel(null)}>Batal</button></div>
+        </div>}
+      </Modal>
+    </section>
+  )
+}
+
 function BackLink() {
   const fromDidik = useLocation().pathname.startsWith('/admin/peserta-didik')
   return <Link to={fromDidik ? '/admin/peserta-didik' : '/admin/pendaftar'} className="mb-3 inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold text-brand-600 hover:underline"><IconArrowLeft size={16} />Kembali ke {fromDidik ? 'Peserta didik' : 'Pendaftar'}</Link>
@@ -395,23 +508,24 @@ export function RincianPendaftaran() {
   const user = s.users.find((u) => u.id === r?.userId)
   if (!r || !user) return <><BackLink /><div className="card"><Empty title="Pendaftar tidak ditemukan" body="Data ini tidak ada atau Anda tidak berhak melihatnya." action={<Link to="/admin/pendaftar" className="btn-primary">Kembali</Link>} /></div></>
   const prog = s.programs.find((p) => p.id === r.programId)
-  const fee = s.settings.regFee ?? 200_000
+  const fee = regFeeFor(s, r) // tarif umum dikurangi potongan; 0 bila angkatannya dibebaskan
+  const cut = discountsFor(s, r.id).filter((d) => d.target === 'pendaftaran').reduce((t, d) => t + d.amount, 0)
   const pays = s.payments.filter((p) => p.registrationId === r.id && p.kind === 'pendaftaran').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const verified = pays.find((p) => p.status === 'verified')
-  const free = !verified && !!s.batches.find((b) => b.id === r.batchId)?.freeRegFee
-  const stateLabel = verified ? 'Terverifikasi' : free ? 'Dibebaskan' : pays.some((p) => p.status === 'submitted') ? 'Menunggu verifikasi' : 'Belum bayar'
+  const free = !verified && fee === 0
+  const stateLabel = verified ? 'Terverifikasi' : free ? (cut > 0 ? 'Dipotong seluruhnya' : 'Dibebaskan') : pays.some((p) => p.status === 'submitted') ? 'Menunggu verifikasi' : 'Belum bayar'
   return (
     <>
       <BackLink />
       <PageHeader title={user.name} sub={`${prog?.title ?? ''} · ${r.code}`} action={<span className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold ring-1 ${verified ? PAY_CHIP.verified.cls : free ? 'bg-sky-50 text-sky-800 ring-sky-200' : pays.some((p) => p.status === 'submitted') ? PAY_CHIP.submitted.cls : 'bg-canvas text-ink ring-line'}`}>{stateLabel}</span>} />
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
-        <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted">Biaya pendaftaran</p><p className="mt-1 text-2xl font-bold tabular-nums">{free ? 'Dibebaskan' : rupiah(fee)}</p></div>
+        <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted">Biaya pendaftaran</p><p className="mt-1 text-2xl font-bold tabular-nums">{free && !cut ? 'Dibebaskan' : rupiah(fee)}</p>{cut > 0 && <p className="text-xs text-sky-800">Setelah potongan {rupiah(cut)} dari {rupiah(s.settings.regFee ?? 200_000)}</p>}</div>
         <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted">Sudah dibayar</p><p className="mt-1 text-2xl font-bold tabular-nums text-emerald-700">{rupiah(verified?.amountPaid ?? 0)}</p></div>
         <div className="card p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted">Belum dibayar</p><p className="mt-1 text-2xl font-bold tabular-nums text-amber-800">{rupiah(verified || free ? 0 : fee)}</p></div>
       </div>
       <section className="card overflow-hidden" aria-labelledby="bukti-daftar">
         <header className="border-b border-line px-5 py-3"><h2 id="bukti-daftar" className="font-bold">Bukti pembayaran pendaftaran</h2></header>
-        {pays.length === 0 && free ? <p className="p-5 text-sm text-muted">Angkatan peserta ini dibebaskan dari biaya pendaftaran.</p>
+        {pays.length === 0 && free ? <p className="p-5 text-sm text-muted">{cut > 0 ? 'Biaya pendaftaran pendaftar ini dipotong seluruhnya, jadi tidak ada yang perlu dibayar.' : 'Angkatan peserta ini dibebaskan dari biaya pendaftaran.'}</p>
           : pays.length === 0 ? <p className="p-5 text-sm text-muted">Pendaftar belum mengunggah bukti pembayaran pendaftaran. Bila ia sudah membayar langsung di loket keuangan, catat pembayarannya di bagian <a href="#catat-daftar" className="font-semibold text-brand-600 underline">Catat pembayaran pendaftaran</a> di bawah.</p> : (
           <ul className="divide-y divide-line">
             {pays.map((p) => {
@@ -444,6 +558,7 @@ export function RincianPendaftaran() {
           </ul>
         )}
       </section>
+      <PotonganBiaya regId={r.id} />
       <CatatBiayaPendaftaran regId={r.id} />
       <p className="mt-4 text-xs text-muted">Biaya registrasi ulang dan cicilan tidak ditampilkan di sini. Setelah pendaftar diterima dan registrasi ulangnya terkonfirmasi, rinciannya ada di menu Peserta didik.</p>
       <Modal open={!!rej} title="Tolak pembayaran pendaftaran" onClose={() => setRej(null)}>

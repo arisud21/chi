@@ -1,5 +1,20 @@
 // Migrasi ringan untuk database yang sudah berjalan: menambah kolom baru bila belum ada. Aman dijalankan berulang.
-import { q } from './lib.js'
+import { q, uid } from './lib.js'
+
+/**
+ * Lengkapi kurikulum yang belum diisi (aman dijalankan berulang):
+ * mata pelajaran pelatihan tanpa kurikulum masuk ke kurikulum terbaru pelatihannya (dibuat "Kurikulum awal" bila belum ada),
+ * dan angkatan tanpa kurikulum memakai kurikulum terbaru pelatihannya.
+ */
+export async function ensureCurricula() {
+  for (const { program_id: pid } of await q('SELECT DISTINCT program_id FROM subjects WHERE program_id IS NOT NULL AND curriculum_id IS NULL')) {
+    let [cur] = await q('SELECT id FROM curricula WHERE program_id = ? ORDER BY is_active DESC, created_at DESC LIMIT 1', [pid])
+    if (!cur) { cur = { id: uid() }; await q("INSERT INTO curricula (id, program_id, name, description) VALUES (?, ?, 'Kurikulum awal', 'Dibuat otomatis dari bank mata pelajaran sebelumnya.')", [cur.id, pid]) }
+    await q('UPDATE subjects SET curriculum_id = ? WHERE program_id = ? AND curriculum_id IS NULL', [cur.id, pid])
+  }
+  await q(`UPDATE batches b SET b.curriculum_id = (SELECT c.id FROM curricula c WHERE c.program_id = b.program_id ORDER BY c.is_active DESC, c.created_at DESC LIMIT 1)
+    WHERE b.curriculum_id IS NULL`)
+}
 
 const COLUMNS = [
   // Biaya tambahan bisa ditetapkan untuk satu peserta didik (user_id terisi) selain per program.
@@ -55,10 +70,37 @@ const COLUMNS = [
   // Nilai magang (diinput Akademik) dan negara perusahaan mitra: dipakai transkrip akhir pelatihan.
   ['placements', 'score', 'DECIMAL(5,1) NULL'],
   ['companies', 'country', "VARCHAR(80) NOT NULL DEFAULT 'Indonesia'"],
+  // Kurikulum pelatihan: mata pelajaran milik satu kurikulum, dan tiap angkatan memakai satu kurikulum.
+  ['subjects', 'curriculum_id', 'CHAR(36) NULL'],
+  ['batches', 'curriculum_id', 'CHAR(36) NULL'],
 ]
 
 // Tabel baru untuk database yang sudah berjalan (sama dengan schema.sql).
 const TABLES = [
+  // Potongan biaya per pendaftar (sama dengan schema.sql).
+  `CREATE TABLE IF NOT EXISTS registration_discounts (
+    id CHAR(36) PRIMARY KEY,
+    registration_id CHAR(36) NOT NULL,
+    target VARCHAR(50) NOT NULL,
+    label VARCHAR(120) NOT NULL,
+    amount BIGINT NOT NULL,
+    reason VARCHAR(255) NOT NULL,
+    created_by CHAR(36) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (registration_id, target),
+    FOREIGN KEY (registration_id) REFERENCES registrations(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // Kurikulum pelatihan (sama dengan schema.sql).
+  `CREATE TABLE IF NOT EXISTS curricula (
+    id CHAR(36) PRIMARY KEY,
+    program_id CHAR(36) NOT NULL,
+    name VARCHAR(120) NOT NULL,
+    description VARCHAR(255) NOT NULL DEFAULT '',
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (program_id, name),
+    FOREIGN KEY (program_id) REFERENCES programs(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   // CHI Today: kabar kegiatan untuk publik. is_featured = tampil di bagian Kegiatan pada landing page.
   `CREATE TABLE IF NOT EXISTS chi_today (
     id CHAR(36) PRIMARY KEY,
@@ -107,6 +149,11 @@ export async function migrate() {
     const [r] = await q('SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?', [table, col])
     if (!Number(r.n)) { await q(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); added.push(`${table}.${col}`) }
   }
+  // Nama mata pelajaran kini unik per kurikulum (bukan per pelatihan), agar kurikulum baru boleh memuat nama yang sama.
+  const idx = await q("SELECT INDEX_NAME n, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) cols FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'subjects' AND NON_UNIQUE = 0 GROUP BY INDEX_NAME")
+  if (!idx.some((x) => x.n === 'uq_subject_curriculum')) await q('ALTER TABLE subjects ADD UNIQUE KEY uq_subject_curriculum (program_id, curriculum_id, name)')
+  for (const x of idx) if (x.cols === 'program_id,name') await q(`ALTER TABLE subjects DROP INDEX \`${x.n}\``)
+  await ensureCurricula()
   // Dulu instructor_program hanya muat satu program (VARCHAR(36)); kini bisa banyak, jadi diperlebar.
   const [w] = await q("SELECT CHARACTER_MAXIMUM_LENGTH len FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'instructor_program'")
   if (w && Number(w.len) < 500) await q('ALTER TABLE users MODIFY COLUMN instructor_program VARCHAR(500) NULL')

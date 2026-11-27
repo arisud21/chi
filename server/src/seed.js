@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { UPLOAD_DIR, pool, q, uid } from './lib.js'
-import { migrate } from './migrate.js'
+import { ensureCurricula, migrate } from './migrate.js'
 import { importBankSoal } from './bankSoal.js'
 
 if (process.env.NODE_ENV === 'production') throw new Error('Seed demo tidak boleh dijalankan di produksi.')
@@ -12,7 +12,7 @@ const day = 86_400_000
 const at = (n) => new Date(Date.now() + n * day)
 const dateOnly = (n) => at(n).toISOString().slice(0, 10)
 
-const tables = ['news_reads', 'news', 'logbook_entries', 'placements', 'companies', 'registration_documents', 'exam_tokens', 'fee_items', 'exam_attempts', 'exams', 'questions', 'question_banks', 'notifications', 'installments', 'payment_plans', 'batch_subjects', 'participant_profiles', 'submissions', 'assignments', 'attendances', 'subject_grades', 'grades', 'certificates', 'certificate_sequences', 'certificate_templates', 'payments', 'materials', 'class_sessions', 'subjects',
+const tables = ['news_reads', 'news', 'logbook_entries', 'placements', 'companies', 'registration_documents', 'exam_tokens', 'fee_items', 'exam_attempts', 'exams', 'questions', 'question_banks', 'notifications', 'installments', 'payment_plans', 'batch_subjects', 'participant_profiles', 'submissions', 'assignments', 'attendances', 'subject_grades', 'grades', 'certificates', 'certificate_sequences', 'certificate_templates', 'payments', 'materials', 'class_sessions', 'subjects', 'curricula', 'registration_discounts',
   'registrations', 'batches', 'programs', 'email_tokens', 'email_queue', 'audit_logs', 'landing_revisions', 'settings', 'files', 'users']
 await migrate()
 await q('SET FOREIGN_KEY_CHECKS = 0')
@@ -73,6 +73,7 @@ for (const [pk, list] of Object.entries(subjects)) {
     await q('INSERT INTO subjects (id, program_id, name, kind, hours) VALUES (?,?,?,?,?)', [SJ[name], P[pk], name, kind, hours])
   }
 }
+await ensureCurricula() // mata pelajaran dan angkatan demo masuk ke "Kurikulum awal" pelatihannya
 const batchSubjects = {
   fo0: [['Pengantar Industri Perhotelan', 1], ['Reservasi dan Front Desk', 4], ['Check-in dan Check-out', 4], ['Penanganan Keluhan Tamu', 2], ['Bahasa Inggris Perhotelan', 1]],
   fo1: [['Pengantar Industri Perhotelan', 1], ['Reservasi dan Front Desk', 3], ['Check-in dan Check-out', 3], ['Penanganan Keluhan Tamu', 2], ['Etika dan Standar Pelayanan', 1]],

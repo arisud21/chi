@@ -1,7 +1,7 @@
 import { IconDownload, IconFileSpreadsheet } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Modal, Table, useToast } from '../../components/ui'
-import { importJadwal, useStore, type State } from '../../lib/store'
+import { importJadwal, subjectFitsBatch, useStore, type State } from '../../lib/store'
 import { buildXlsx, downloadBlob, type Cell } from '../../lib/xlsx'
 import { excelTime, readTable } from '../../lib/xlsxRead'
 
@@ -47,7 +47,7 @@ function downloadTemplate(s: State) {
       ['SEMUA', s.subjects.find((x) => x.active && x.programId === '')?.name ?? '(mapel kelas gabungan)', ins?.name ?? '', 'Jumat', '13:00', '15:00', 'Aula', 6],
     ] },
     { name: 'Angkatan', cols: [{ header: 'Kode angkatan', width: 18 }, { header: 'Program', width: 30 }, { header: 'Periode', width: 26 }], rows: bs.map((x): Cell[] => [x.code, prog(x.programId), `${x.startDate} s.d. ${x.endDate}`]) },
-    { name: 'Mata pelajaran', cols: [{ header: 'Kode', width: 10 }, { header: 'Mata pelajaran', width: 34 }, { header: 'Program', width: 32 }], rows: s.subjects.filter((x) => x.active).map((x): Cell[] => [x.code ?? '', x.name, prog(x.programId)]) },
+    { name: 'Mata pelajaran', cols: [{ header: 'Kode', width: 10 }, { header: 'Mata pelajaran', width: 34 }, { header: 'Program', width: 32 }, { header: 'Kurikulum', width: 24 }], rows: s.subjects.filter((x) => x.active).map((x): Cell[] => [x.code ?? '', x.name, prog(x.programId), s.curricula.find((c) => c.id === x.curriculumId)?.name ?? '']) },
     { name: 'Instruktur', cols: [{ header: 'Nama', width: 28 }, { header: 'Email', width: 30 }], rows: s.users.filter((u) => u.role === 'instruktur' && u.active).map((u): Cell[] => [u.name, u.email]) },
     { name: 'Petunjuk', cols: [{ header: 'Petunjuk pengisian', width: 110 }], rows: [
       ['Satu baris = satu mata pelajaran di satu angkatan. Baris yang mata pelajarannya sudah ada di angkatan itu akan diperbarui.'],
@@ -81,9 +81,9 @@ function mapRows(s: State, table: string[][]): Row[] {
     // Mata pelajaran dicocokkan dengan kode atau nama; harus ada di bank program angkatan atau kelas gabungan.
     const sText = get('subject').toLowerCase()
     const cands = s.subjects.filter((x) => x.active && ((x.code ?? '').toLowerCase() === sText || x.name.toLowerCase() === sText))
-    const sj = targets.length ? cands.find((x) => x.programId === '' || targets.every((b) => b.programId === x.programId)) : cands[0]
+    const sj = targets.length ? cands.find((x) => targets.every((b) => subjectFitsBatch(s, x, b))) : cands[0]
     if (!sText) problems.push('Mata pelajaran kosong')
-    else if (!sj) problems.push(cands.length ? `"${get('subject')}" bukan mata pelajaran program angkatan tersebut` : `Mata pelajaran "${get('subject')}" tidak dikenal`)
+    else if (!sj) problems.push(cands.length ? `"${get('subject')}" bukan mata pelajaran kurikulum angkatan tersebut` : `Mata pelajaran "${get('subject')}" tidak dikenal`)
     if ((all || targets.length > 1) && sj && sj.programId !== '') problems.push('Lebih dari satu angkatan atau SEMUA hanya untuk mata pelajaran kelas gabungan')
     const iText = get('instructor').toLowerCase()
     const ins = instructors.find((u) => u.email.toLowerCase() === iText) ?? instructors.find((u) => u.name.toLowerCase() === iText)

@@ -12,9 +12,32 @@ export interface Item {
 const STAGE_RANK = ['data', 'bayar_daftar', 'ujian', 'menunggu_hasil', 'registrasi_ulang', 'aktif']
 const rank = (st: string) => (st === 'tidak_lulus' ? 3 : STAGE_RANK.indexOf(st))
 
+/** Potongan biaya satu registrasi dari bagian keuangan. */
+export const discountsFor = (s: Pick<State, 'discounts'>, regId: string) => s.discounts.filter((d) => d.registrationId === regId)
+
+/** Biaya pendaftaran yang harus dibayar: tarif umum dikurangi potongan biaya pendaftaran (rumus sama dengan server). */
+export function regFeeFor(s: Pick<State, 'discounts' | 'settings' | 'batches'>, r: Registration) {
+  if (s.batches.find((b) => b.id === r.batchId)?.freeRegFee) return 0
+  const cut = discountsFor(s, r.id).filter((d) => d.target === 'pendaftaran').reduce((t, d) => t + d.amount, 0)
+  return Math.max(0, (s.settings.regFee ?? 200000) - cut)
+}
+
+/**
+ * Pengurang total biaya registrasi (yang dicicil), sama dengan server: biaya pendaftaran yang sudah dibayar, potongan biaya pelatihan
+ * dan biaya tambahan, serta potongan biaya pendaftaran bila biaya pendaftaran ikut diperhitungkan (sudah dibayar atau dipotong seluruhnya).
+ */
+export function scheduleCreditFor(s: State, r: Registration) {
+  const credit = s.payments.filter((p) => p.registrationId === r.id && p.kind === 'pendaftaran' && p.status === 'verified').reduce((t, p) => t + p.amountPaid, 0)
+  const ds = discountsFor(s, r.id)
+  const reg = ds.filter((d) => d.target === 'pendaftaran').reduce((t, d) => t + d.amount, 0)
+  const other = ds.reduce((t, d) => t + d.amount, 0) - reg
+  const counted = credit > 0 || (reg > 0 && reg >= (s.settings.regFee ?? 200000))
+  return credit + other + (counted ? reg : 0)
+}
+
 /** Semua kewajiban bayar satu registrasi, urut sesuai tahapan. */
 export function itemsFor(s: State, r: Registration): Item[] {
-  const regFee = s.settings.regFee ?? 200000
+  const regFee = regFeeFor(s, r)
   const pays = s.payments.filter((p) => p.registrationId === r.id)
   const items: Item[] = []
   const detail = (p?: (typeof pays)[number]) => ({ paidOn: p?.transferDate, receipt: p?.receiptNo, proofFileId: p?.proofFileId, payer: p?.payerName, note: p?.note })
@@ -28,6 +51,8 @@ export function itemsFor(s: State, r: Registration): Item[] {
     ok ? { key: 'reg', label: 'Biaya pendaftaran', amount: ok.amountPaid, state: 'paid', ...detail(ok) }
       // Angkatan yang dibebaskan: biaya pendaftaran dianggap lunas (Rp0). Biaya registrasi tetap ditagih penuh.
       : batch?.freeRegFee ? { key: 'reg', label: 'Biaya pendaftaran', amount: 0, state: 'paid', note: `Dibebaskan untuk angkatan ${batch.code}` }
+      // Biaya pendaftaran yang dipotong seluruhnya oleh bagian keuangan: dianggap lunas (Rp0).
+      : regFee === 0 ? { key: 'reg', label: 'Biaya pendaftaran', amount: 0, state: 'paid', note: 'Dipotong seluruhnya oleh bagian keuangan' }
       : waiting ? { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: 'confirm', ...detail(waiting) }
       : imported ? { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: 'unpaid' }
       : rank(r.stage) > 1 ? { key: 'reg', label: 'Biaya pendaftaran', amount: regFee, state: 'paid' } // data lama tanpa catatan pembayaran

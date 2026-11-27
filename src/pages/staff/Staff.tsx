@@ -9,7 +9,7 @@ import { InfografisKeuangan } from './InfografisKeuangan'
 import { exportNilaiXlsx } from '../../lib/exportNilai'
 import { ask, Badge, CountUp, KIND_LABEL, Table, Empty, Field, Modal, MoneyInput, PageHeader, Reveal, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
 import {
-  archiveProgram, restoreProgram, deleteBatch, deleteProgram, finalScore, getState, newId, recommendPass, rejectPayment,
+  archiveProgram, restoreProgram, batchCurriculumId, currentCurriculum, deleteBatch, deleteProgram, finalScore, getState, newId, recommendPass, rejectPayment,
   saveBatch, saveGrade, saveProgram, saveSettings, saveUser, deleteUser, seatsTaken, submitGrade, teachesBatch, useStore, verifyPayment,
   setUserPassword, unattendedSessions,
 } from '../../lib/store'
@@ -238,7 +238,13 @@ export function ProgramAdmin() {
       </Modal>
       <Modal open={!!batch} title={batch && s.batches.some((b) => b.id === batch.id) ? 'Ubah angkatan' : 'Angkatan baru'} onClose={() => setBatch(null)}>
         {batch && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (batch.endDate < batch.startDate) return toast('Tanggal selesai sebelum tanggal mulai.', 'err'); act(saveBatch(batch), 'Angkatan disimpan.', () => setBatch(null)) }}>
-          <Field label="Program"><select className="input" value={batch.programId} onChange={(e) => setBatch({ ...batch, programId: e.target.value })}>{s.programs.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
+          <Field label="Program"><select className="input" value={batch.programId} onChange={(e) => setBatch({ ...batch, programId: e.target.value, curriculumId: currentCurriculum(s, e.target.value)?.id ?? '' })}>{s.programs.filter((p) => !p.archived).map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></Field>
+          <Field label="Kurikulum" hint="Menentukan mata pelajaran angkatan ini. Dikelola Akademik di Bank mata pelajaran.">
+            <select className="input" value={batchCurriculumId(s, batch)} onChange={(e) => setBatch({ ...batch, curriculumId: e.target.value })}>
+              {!s.curricula.some((c) => c.programId === batch.programId) && <option value="">Belum ada kurikulum</option>}
+              {s.curricula.filter((c) => c.programId === batch.programId && (c.active || c.id === batch.curriculumId)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Kode"><input className="input" required value={batch.code} onChange={(e) => setBatch({ ...batch, code: e.target.value })} /></Field>
             <Field label="Kuota"><input className="input" type="number" min={1} required value={batch.quota} onChange={(e) => setBatch({ ...batch, quota: +e.target.value })} /></Field>

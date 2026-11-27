@@ -100,6 +100,21 @@ export async function saveUpload(file, { kind, ownerId, allowed, alt }) {
 
 export const randomCode = (n) => Array.from(crypto.randomBytes(n), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('')
 
+/** Batas usia pendaftar (tahun), dipakai daftar sendiri dan pendaftar yang ditambahkan admin. */
+export const MAX_AGE = 30
+/** Usia penuh (tahun) pada hari ini, atau null bila tanggal tidak valid atau di masa depan. */
+export const ageOn = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!m) return null
+  const [y, mo, d] = [+m[1], +m[2], +m[3]]
+  const t = new Date(Date.UTC(y, mo - 1, d))
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return null
+  const n = new Date()
+  let a = n.getUTCFullYear() - y
+  if (n.getUTCMonth() + 1 < mo || (n.getUTCMonth() + 1 === mo && n.getUTCDate() < d)) a--
+  return a < 0 ? null : a
+}
+
 /** Alasan baku pendaftar yang dinyatakan mundur otomatis oleh sistem (status expired). Hanya yang beralasan ini yang boleh melanjutkan sendiri. */
 export const AUTO_WITHDRAW_DAYS = 14
 export const AUTO_WITHDRAW_REASON = 'Mengundurkan diri otomatis: tidak melanjutkan proses pendaftaran atau registrasi selama 2 minggu'

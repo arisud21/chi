@@ -23,7 +23,7 @@ const mapProgram = (p) => ({
 const mapBatch = (b) => ({
   id: b.id, programId: b.program_id, code: b.code, angkatan: b.angkatan ?? null, startDate: b.start_date, endDate: b.end_date, quota: b.quota,
   status: b.status, location: b.location,
-  freeRegFee: bool(b.free_reg_fee),
+  freeRegFee: bool(b.free_reg_fee), curriculumId: b.curriculum_id ?? '',
   scheduleDays: b.schedule_days, startTime: b.start_time ? String(b.start_time).slice(0, 5) : '', endTime: b.end_time ? String(b.end_time).slice(0, 5) : '', plannedSessions: b.planned_sessions,
 })
 const mapReg = (r) => ({
@@ -48,7 +48,9 @@ const mapGrade = (g) => ({
   finalScore: g.final_score == null ? null : Number(g.final_score),
   status: g.status, passed: g.passed == null ? undefined : bool(g.passed), overrideReason: g.override_reason ?? undefined,
 })
-const mapSubject = (x) => ({ id: x.id, programId: x.program_id ?? '', code: x.code ?? '', name: x.name, kind: x.kind, hours: x.hours, hoursPerMeeting: x.hours_per_meeting ?? null, meetings: x.meetings ?? null, description: x.description, active: bool(x.is_active) })
+const mapDiscount = (d) => ({ id: d.id, registrationId: d.registration_id, target: d.target, label: d.label, amount: Number(d.amount), reason: d.reason, createdBy: d.created_by ?? '', createdAt: iso(d.created_at) })
+const mapCurriculum =(x) => ({ id: x.id, programId: x.program_id, name: x.name, description: x.description, active: bool(x.is_active), createdAt: iso(x.created_at) })
+const mapSubject = (x) => ({ id: x.id, programId: x.program_id ?? '', curriculumId: x.curriculum_id ?? '', code: x.code ?? '', name: x.name, kind: x.kind, hours: x.hours, hoursPerMeeting: x.hours_per_meeting ?? null, meetings: x.meetings ?? null, description: x.description, active: bool(x.is_active) })
 const mapSession = (s) => ({ id: s.id, batchId: s.batch_id, subjectId: s.subject_id ?? undefined, title: s.title, startAt: iso(s.start_at), location: s.location, meetingUrl: s.meeting_url ?? undefined })
 const mapMaterial = (m) => ({ id: m.id, batchId: m.batch_id, sessionId: m.session_id ?? undefined, title: m.title, kind: m.kind, fileId: m.file_id ?? undefined, url: m.url ?? undefined })
 const mapAssignment = (a) => ({ id: a.id, batchId: a.batch_id, subjectId: a.subject_id ?? '', title: a.title, description: a.description ?? '', dueAt: iso(a.due_at) })
@@ -126,8 +128,10 @@ export async function buildState(user, devMode, impersonator = null) {
   ])
 
   const subjectRows = await q(role && staff ? 'SELECT * FROM subjects ORDER BY program_id, kind, name' : 'SELECT sj.* FROM subjects sj LEFT JOIN programs p ON p.id = sj.program_id WHERE sj.is_active = 1 AND (sj.program_id IS NULL OR (p.is_active = 1 AND p.deleted_at IS NULL)) ORDER BY sj.kind, sj.name')
+  const curriculumRows = await q(role && staff ? 'SELECT * FROM curricula ORDER BY created_at' : 'SELECT * FROM curricula WHERE is_active = 1 ORDER BY created_at')
   const s = {
     sessionUserId: user?.id ?? null,
+    curricula: curriculumRows.map(mapCurriculum),
     impersonatedBy: impersonator ? { id: impersonator.id, name: impersonator.name } : null, // Super Admin yang sedang masuk sebagai instruktur
     devMode,
     programs: programs.map(mapProgram),
@@ -144,7 +148,7 @@ export async function buildState(user, devMode, impersonator = null) {
       imageId: n.image_id ?? '', imageSrc: n.image_src ?? '', published: !!n.is_published, featured: !!n.is_featured, sort: Number(n.sort_order), createdAt: iso(n.created_at),
     })),
     subjects: subjectRows.map(mapSubject), batchSubjects: [],
-    users: [], registrations: [], payments: [], installments: [], documents: [], plans: [], feeItems: [], notifications: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], sessions: [], materials: [], assignments: [], submissions: [], attendances: [],
+    users: [], registrations: [], payments: [], installments: [], discounts: [], documents: [], plans: [], feeItems: [], notifications: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], sessions: [], materials: [], assignments: [], submissions: [], attendances: [],
     companies: [], placements: [], logbook: [], news: [], cashTx: [],
     profiles: [], grades: [], subjectGrades: [], audit: [], emails: [], media: [], draftSections: [], revisions: [], publishedRevisionId: null,
   }
@@ -175,6 +179,7 @@ export async function buildState(user, devMode, impersonator = null) {
     const inList = ids.length ? ids : ['-']
     s.payments = (await q('SELECT * FROM payments WHERE registration_id IN (?)', [inList])).map(mapPay)
     s.installments = (await q('SELECT * FROM installments WHERE registration_id IN (?) ORDER BY seq', [inList])).map(mapInst)
+    s.discounts = (await q('SELECT * FROM registration_discounts WHERE registration_id IN (?)', [inList])).map(mapDiscount)
     s.documents = (await q('SELECT * FROM registration_documents WHERE user_id = ?', [me])).map(mapDoc)
     s.plans = (await q('SELECT * FROM payment_plans WHERE is_active = 1')).map(mapPlan)
     s.feeItems = (await q('SELECT * FROM fee_items WHERE is_active = 1 AND (user_id IS NULL OR user_id = ?)', [me])).map(mapFeeItem)
@@ -246,6 +251,7 @@ export async function buildState(user, devMode, impersonator = null) {
   if (FINANCE.includes(role)) s.payments = (await q('SELECT * FROM payments')).map(mapPay)
   if (FINANCE.includes(role)) {
     s.installments = (await q('SELECT * FROM installments ORDER BY registration_id, seq')).map(mapInst)
+    s.discounts = (await q('SELECT * FROM registration_discounts ORDER BY created_at')).map(mapDiscount)
     s.plans = (await q('SELECT * FROM payment_plans ORDER BY created_at')).map(mapPlan)
     s.feeItems = (await q('SELECT * FROM fee_items ORDER BY created_at')).map(mapFeeItem)
   }

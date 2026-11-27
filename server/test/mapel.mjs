@@ -58,8 +58,9 @@ const st0 = await akad.state()
 const programs = st0.programs.filter((p) => !p.archived)
 const map = sections.map((sec) => programs.map((p) => ({ id: p.id, sc: titleScore(sec.title, p.title) })).sort((a, b) => b.sc - a.sc)[0].id)
 const isShared = (r) => /gabungan/i.test(r.description)
+const curOf = (pid) => st0.curricula.filter((c) => c.programId === pid && c.active).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id ?? ''
 const sharedRows = new Map()
-const own = sections.flatMap((sec, i) => sec.rows.filter((r) => { if (!isShared(r)) return true; if (!sharedRows.has(r.name.toLowerCase())) sharedRows.set(r.name.toLowerCase(), r); return false }).map((r) => ({ programId: map[i], code: r.code, name: r.name, kind: r.kind, hours: r.hours, hoursPerMeeting: r.hoursPerMeeting, meetings: r.meetings, description: r.description })))
+const own = sections.flatMap((sec, i) => sec.rows.filter((r) => { if (!isShared(r)) return true; if (!sharedRows.has(r.name.toLowerCase())) sharedRows.set(r.name.toLowerCase(), r); return false }).map((r) => ({ programId: map[i], curriculumId: curOf(map[i]), code: r.code, name: r.name, kind: r.kind, hours: r.hours, hoursPerMeeting: r.hoursPerMeeting, meetings: r.meetings, description: r.description })))
 const shared = [...sharedRows.values()].map((r) => ({ shared: true, programId: '', code: r.code, name: r.name, kind: r.kind, hours: r.hours, hoursPerMeeting: r.hoursPerMeeting, meetings: r.meetings, description: r.description }))
 const items = [...own, ...shared]
 check('kelas gabungan dikumpulkan sekali per nama (3 dari 6 baris)', !live.ok || (shared.length === 3 && own.length === 10), `${shared.length} gabungan, ${own.length} khusus`)

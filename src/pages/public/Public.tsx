@@ -4,7 +4,7 @@ import { Link, Outlet, useParams, useLocation } from 'react-router-dom'
 import { InstallButton } from '../../components/InstallApp'
 import { SectionView } from '../../components/SectionRenderer'
 import { Logo, Reveal, dateID, rupiah } from '../../components/ui'
-import { seatsTaken, useStore } from '../../lib/store'
+import { catalogSubjects, seatsTaken, useStore } from '../../lib/store'
 import type { SectionType } from '../../lib/types'
 
 const DARK_PAGES = ['/', '/profil', '/struktur-organisasi', '/program-pelatihan', '/chi-today']
@@ -200,7 +200,7 @@ export function ProgramDetail() {
   const p = s.programs.find((x) => x.slug === slug && !x.archived)
   if (!p) return <div className="mx-auto max-w-xl px-4 py-24 text-center"><p className="font-semibold">Program tidak ditemukan.</p><Link to="/" className="btn-ghost mt-4">Kembali</Link></div>
   const batches = s.batches.filter((b) => b.programId === p.id && b.status === 'open')
-  const subjects = s.subjects.filter((x) => (x.programId === p.id || x.programId === '') && x.active)
+  const subjects = catalogSubjects(s, p.id, true)
   return (
     <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6">
       <Reveal>

@@ -5,7 +5,7 @@ import {
 import { motion } from 'motion/react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { seatsTaken, useStore } from '../lib/store'
+import { catalogSubjects, seatsTaken, useStore } from '../lib/store'
 import type { Program, Section } from '../lib/types'
 import { CountUp, Reveal, dateID, rupiah } from './ui'
 
@@ -166,7 +166,7 @@ function Programs({ c }: { c: Section['content'] }) {
         <div className="mt-14 space-y-20">
           {list.map((p, i) => {
             const open = s.batches.filter((b) => b.programId === p.id && b.status === 'open').length
-            const subjects = s.subjects.filter((x) => x.programId === p.id && x.active).slice(0, 4).map((x) => x.name)
+            const subjects = catalogSubjects(s, p.id).slice(0, 4).map((x) => x.name)
             const points = subjects.length ? subjects : [`${p.durationHours} jam pelatihan`, open ? `${open} angkatan sedang dibuka` : 'Angkatan baru segera dibuka', 'Magang dan penempatan kerja']
             return (
               <div key={p.id} className="grid items-center gap-10 lg:grid-cols-2">

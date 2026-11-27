@@ -15,8 +15,8 @@ import { beritaAcaraData, beritaAcaraDocx, beritaAcaraPdf } from './beritaAcara.
 import { logbookData, logbookDocx } from './logbookMagang.js'
 import { migrate } from './migrate.js'
 import { addClient } from './realtime.js'
-import { REG_FEE_DEFAULT, afterProfileDone, remainingTotal, renderLetter, renderLetterPreview } from './admission.js'
-import { AUTO_WITHDRAW_REASON, HttpError, UPLOAD_DIR, audit, cq, dt, fail, getSettings, iso, mail, q, saveUpload, tx, uid } from './lib.js'
+import { afterProfileDone, regFeeDue, remainingTotal, renderLetter, renderLetterPreview } from './admission.js'
+import { AUTO_WITHDRAW_REASON, HttpError, MAX_AGE, UPLOAD_DIR, ageOn, audit, cq, dt, fail, getSettings, iso, mail, q, saveUpload, tx, uid } from './lib.js'
 import { processQueue } from './mailer.js'
 import { transcriptPdf } from './pdf.js'
 import { transkripData, transkripDocx, transkripPdf } from './transkripAkhir.js'
@@ -62,19 +62,6 @@ const publicLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: 
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
 const passwordOk = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 100
-const MAX_AGE = 30
-/** Usia penuh (tahun) pada hari ini, atau null bila tanggal tidak valid atau di masa depan. */
-const ageOn = (iso) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!m) return null
-  const [y, mo, d] = [+m[1], +m[2], +m[3]]
-  const t = new Date(Date.UTC(y, mo - 1, d))
-  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return null
-  const n = new Date()
-  let a = n.getUTCFullYear() - y
-  if (n.getUTCMonth() + 1 < mo || (n.getUTCMonth() + 1 === mo && n.getUTCDate() < d)) a--
-  return a < 0 ? null : a
-}
 
 /* ---------- auth ---------- */
 app.post('/api/auth/register', authLimiter, wrap(async (req, res) => {
@@ -237,7 +224,8 @@ app.post('/api/upload/proof/:regId', upload.single('file'), wrap(async (req, res
   let due, inst = null
   if (kind === 'pendaftaran') {
     if (r.stage !== 'bayar_daftar') fail(r.stage === 'data' ? 'Lengkapi data diri dulu sebelum membayar pendaftaran.' : 'Biaya pendaftaran sudah dibayar.')
-    due = Number(s.regFee ?? REG_FEE_DEFAULT)
+    due = await regFeeDue(null, r, s) // tarif umum dikurangi potongan dari keuangan
+    if (due <= 0) fail('Biaya pendaftaran Anda sudah dihapus lewat potongan, tidak perlu membayar.')
   } else if (kind === 'registrasi_ulang') {
     if (r.stage !== 'registrasi_ulang') fail('Registrasi ulang dibuka setelah Anda dinyatakan lulus.')
     if (s.reenrollDue && new Date(s.reenrollDue + 'T23:59:59Z') < new Date()) fail('Batas registrasi ulang sudah lewat.')
