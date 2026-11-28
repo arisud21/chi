@@ -2,6 +2,7 @@ import { animate, motion, useInView, useReducedMotion } from 'motion/react'
 import { IconCheck, IconEye, IconEyeOff, IconX } from '@tabler/icons-react'
 import { createPortal } from 'react-dom'
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import type { Result } from '../lib/store'
 import type { RegStatus } from '../lib/types'
 
@@ -28,6 +29,12 @@ export function Reveal({ children, delay = 0, className = '' }: { children: Reac
 }
 
 /** Angka menghitung naik sekali saat terlihat. */
+/** Nilai awal filter dari URL (?kunci=nilai), dipakai tautan dari dashboard. Kosong bila tidak ada. */
+export function useQueryParam(key: string) {
+  const [sp] = useSearchParams()
+  return sp.get(key) ?? ''
+}
+
 export function CountUp({ to }: { to: number }) {
   const ref = useRef<HTMLSpanElement>(null)
   const inView = useInView(ref, { once: true })

@@ -44,15 +44,15 @@ function downloadTemplate(s: State) {
   downloadBlob(buildXlsx([
     { name: 'Jadwal', cols: COLS.map((c) => ({ header: c.header, width: c.width, text: 'text' in c && c.text })), rows: [
       [b?.code ?? '', sj?.name ?? '', ins?.name ?? '', 'Senin, Rabu', '08:00', '10:00', 'Ruang 1', 8],
-      ['SEMUA', s.subjects.find((x) => x.active && x.programId === '')?.name ?? '(mapel kelas gabungan)', ins?.name ?? '', 'Jumat', '13:00', '15:00', 'Aula', 6],
+      [bs.slice(0, 2).map((x) => x.code).join(', ') || 'SEMUA', sj?.name ?? '(mata pelajaran)', ins?.name ?? '', 'Jumat', '13:00', '15:00', 'Aula', 6],
     ] },
     { name: 'Angkatan', cols: [{ header: 'Kode angkatan', width: 18 }, { header: 'Program', width: 30 }, { header: 'Periode', width: 26 }], rows: bs.map((x): Cell[] => [x.code, prog(x.programId), `${x.startDate} s.d. ${x.endDate}`]) },
     { name: 'Mata pelajaran', cols: [{ header: 'Kode', width: 10 }, { header: 'Mata pelajaran', width: 34 }, { header: 'Program', width: 32 }, { header: 'Kurikulum', width: 24 }], rows: s.subjects.filter((x) => x.active).map((x): Cell[] => [x.code ?? '', x.name, prog(x.programId), s.curricula.find((c) => c.id === x.curriculumId)?.name ?? '']) },
     { name: 'Instruktur', cols: [{ header: 'Nama', width: 28 }, { header: 'Email', width: 30 }], rows: s.users.filter((u) => u.role === 'instruktur' && u.active).map((u): Cell[] => [u.name, u.email]) },
     { name: 'Petunjuk', cols: [{ header: 'Petunjuk pengisian', width: 110 }], rows: [
       ['Satu baris = satu mata pelajaran di satu angkatan. Baris yang mata pelajarannya sudah ada di angkatan itu akan diperbarui.'],
-      ['Kode angkatan boleh lebih dari satu dipisah koma (mis. FO-2026-B3, FB-2026-B1).'],
-      ['Untuk mata pelajaran KELAS GABUNGAN, isi SEMUA agar berlaku di semua angkatan aktif seluruh program, atau tulis kode-kode angkatannya.'],
+      ['KELAS GABUNGAN: tulis beberapa kode angkatan dipisah koma (mis. FO-2026-B3, FB-2026-B1), atau SEMUA untuk semua angkatan aktif. Angkatan-angkatan itu belajar bersama dengan instruktur, hari, jam, dan ruang yang sama.'],
+      ['Pada kelas gabungan, tiap angkatan memakai mata pelajaran bernama sama dari kurikulumnya sendiri.'],
       ['Hari: Senin, Selasa, Rabu, Kamis, Jumat, Sabtu, Minggu (boleh disingkat Sen, Sel, ...). Pisahkan dengan koma.'],
       ['Jam: format 24 jam, mis. 08:00 atau 13.30.'],
     ] },
@@ -78,13 +78,14 @@ function mapRows(s: State, table: string[][]): Row[] {
     for (const x of found) if (!x.b) problems.push(`Angkatan "${x.c}" tidak dikenal`); else if (x.b.status === 'finished' || x.b.status === 'cancelled') problems.push(`Angkatan ${x.b.code} sudah selesai/dibatalkan`)
     const targets = all ? active : found.flatMap((x) => (x.b ? [x.b] : []))
     if (!all && !codes.length) problems.push('Kode angkatan kosong')
-    // Mata pelajaran dicocokkan dengan kode atau nama; harus ada di bank program angkatan atau kelas gabungan.
+    // Mata pelajaran dicocokkan dengan kode atau nama di kurikulum angkatan. Untuk kelas gabungan (beberapa angkatan), angkatan utama
+    // adalah yang pertama memuat mata pelajaran ini; angkatan lain memakai mapel bernama sama dari kurikulumnya (dicocokkan server).
     const sText = get('subject').toLowerCase()
     const cands = s.subjects.filter((x) => x.active && ((x.code ?? '').toLowerCase() === sText || x.name.toLowerCase() === sText))
-    const sj = targets.length ? cands.find((x) => targets.every((b) => subjectFitsBatch(s, x, b))) : cands[0]
+    const primary = targets.find((b) => cands.some((x) => subjectFitsBatch(s, x, b)))
+    const sj = targets.length ? (primary ? cands.find((x) => subjectFitsBatch(s, x, primary)) : undefined) : cands[0]
     if (!sText) problems.push('Mata pelajaran kosong')
     else if (!sj) problems.push(cands.length ? `"${get('subject')}" bukan mata pelajaran kurikulum angkatan tersebut` : `Mata pelajaran "${get('subject')}" tidak dikenal`)
-    if ((all || targets.length > 1) && sj && sj.programId !== '') problems.push('Lebih dari satu angkatan atau SEMUA hanya untuk mata pelajaran kelas gabungan')
     const iText = get('instructor').toLowerCase()
     const ins = instructors.find((u) => u.email.toLowerCase() === iText) ?? instructors.find((u) => u.name.toLowerCase() === iText)
     if (!ins) problems.push(iText ? `Instruktur "${get('instructor')}" tidak dikenal` : 'Instruktur kosong')
@@ -98,8 +99,8 @@ function mapRows(s: State, table: string[][]): Row[] {
     if (!Number.isInteger(n) || n < 1 || n > 50) problems.push('Jumlah pertemuan harus 1 sampai 50')
     const base = { startTime, endTime, days, room: get('room'), sessions: n, subjectId: sj?.id ?? '', instructorId: ins?.id ?? '' }
     const label = { subject: sj?.name ?? get('subject'), instructor: ins?.name ?? get('instructor') }
-    // Kelas gabungan: satu entri untuk semua angkatannya. Mapel biasa dengan beberapa angkatan: satu entri per angkatan.
-    if (sj?.programId === '' && targets.length > 1) out.push({ row: i + 2, ...base, batchId: targets[0].id, batchIds: targets.map((b) => b.id), label: { ...label, batch: all ? `SEMUA (${targets.length} angkatan)` : targets.map((b) => b.code).join(', ') }, problems })
+    // Kelas gabungan (beberapa angkatan atau SEMUA): satu entri untuk semua angkatannya.
+    if (targets.length > 1) out.push({ row: i + 2, ...base, batchId: (primary ?? targets[0]).id, batchIds: targets.map((b) => b.id), label: { ...label, batch: all ? `SEMUA (${targets.length} angkatan)` : targets.map((b) => b.code).join(', ') }, problems })
     else if (targets.length) targets.forEach((b) => out.push({ row: i + 2, ...base, batchId: b.id, batchIds: [b.id], label: { ...label, batch: b.code }, problems }))
     else out.push({ row: i + 2, ...base, batchId: '', batchIds: [], label: { ...label, batch: get('batch') }, problems })
   })

@@ -1,5 +1,6 @@
 import { AUTO_WITHDRAW_REASON, getSettings, iso, q } from './lib.js'
 import { canResumeReg, notifCutoff, paidOffIds } from './admission.js'
+import { staffProfileState } from './staffProfile.js'
 
 const bool = (v) => v === 1 || v === true
 
@@ -149,7 +150,7 @@ export async function buildState(user, devMode, impersonator = null) {
     })),
     subjects: subjectRows.map(mapSubject), batchSubjects: [],
     users: [], registrations: [], payments: [], installments: [], discounts: [], documents: [], plans: [], feeItems: [], notifications: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], sessions: [], materials: [], assignments: [], submissions: [], attendances: [],
-    companies: [], placements: [], logbook: [], news: [], cashTx: [],
+    companies: [], placements: [], logbook: [], news: [], cashTx: [], staffProfiles: [], staffCerts: [],
     profiles: [], grades: [], subjectGrades: [], audit: [], emails: [], media: [], draftSections: [], revisions: [], publishedRevisionId: null,
   }
   if (!user) return s
@@ -275,6 +276,7 @@ export async function buildState(user, devMode, impersonator = null) {
       status: x.status ?? 'draft', validatedAt: iso(x.validated_at),
     }))
   }
+  Object.assign(s, await staffProfileState(role, me))
   if (role === 'super_admin') s.audit = (await q('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300')).map((a) => ({ id: String(a.id), at: iso(a.created_at), userId: a.user_id ?? 'sistem', action: a.action, entity: a.entity, detail: a.detail }))
   if (['super_admin', 'admin_pendaftaran'].includes(role)) s.emails = (await q('SELECT * FROM email_queue ORDER BY id DESC LIMIT 200')).map((e) => ({ id: String(e.id), at: iso(e.created_at), to: e.to_email, subject: e.subject, status: e.status }))
   if (CMS_ROLES.includes(role)) {

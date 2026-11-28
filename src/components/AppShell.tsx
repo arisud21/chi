@@ -4,7 +4,7 @@
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { DOC_KINDS, changePassword, logout, markNewsRead, stopImpersonate, useStore } from '../lib/store'
+import { DOC_KINDS, changePassword, logout, markNewsRead, photoOf, stopImpersonate, useStore } from '../lib/store'
 import { ROLE_LABEL, type Role } from '../lib/types'
 import { Field, Logo, Modal, PasswordInput, useAct } from './ui'
 
@@ -16,6 +16,7 @@ const ALL_STAFF: Role[] = ['super_admin', 'admin_pendaftaran', 'admin_keuangan',
 const STAFF_NAV: NavGroup[] = [
   { title: 'Ringkasan', items: [
     { to: '/admin', label: 'Dashboard', icon: IconLayoutDashboard, roles: ALL_STAFF, end: true },
+    { to: '/admin/data-diri', label: 'Data diri', icon: IconIdBadge2, roles: ['instruktur'] },
     { to: '/admin/berita', label: 'Berita', icon: IconNews, roles: ['super_admin', 'admin_pendaftaran'] },
   ] },
   { title: 'Pendaftaran', items: [
@@ -178,6 +179,7 @@ function Shell({ staff }: { staff: boolean }) {
   const [open, setOpen] = useState(false)
   const nav = useNavigate()
   const unread = useStore((s) => s.notifications.filter((n) => !n.read).length)
+  const photo = useStore((s) => (s.sessionUserId ? photoOf(s, s.sessionUserId) : ''))
   const registeredAgain = useStore((s) => s.registrations.some((r) => r.stage === 'aktif'))
   // Ruang belajar dan magang baru terbuka setelah registrasi ulang terkonfirmasi dan kelima berkas terunggah.
   const unlocked = useStore((s) => s.registrations.some((r) => r.stage === 'aktif' && (r.status === 'active' || r.status === 'completed')) && DOC_KINDS.every((k) => s.documents.some((d) => d.kind === k)))
@@ -249,7 +251,9 @@ function Shell({ staff }: { staff: boolean }) {
               <p className="text-sm font-semibold">{user.name}</p>
               <p className="text-xs text-muted">{ROLE_LABEL[user.role]}</p>
             </div>
-            <span className="grid size-10 place-items-center rounded-full bg-brand-100 text-sm font-bold text-brand-700">{user.name.slice(0, 1)}</span>
+            {photo
+              ? <img src={`/api/files/${photo}`} alt={`Foto ${user.name}`} className="size-10 rounded-full object-cover ring-2 ring-brand-100" />
+              : <span className="grid size-10 place-items-center rounded-full bg-brand-100 text-sm font-bold text-brand-700">{user.name.slice(0, 1)}</span>}
           </div>
         </header>
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6"><NewsPopup /><LiveNotifications /><Outlet /></main>

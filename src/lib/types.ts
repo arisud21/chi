@@ -185,7 +185,7 @@ export interface Grade {
   overrideReason?: string
 }
 
-/** Nilai tugas, teori (UTS), dan praktik (UAS) satu peserta di satu mata pelajaran, skala 0-100, diisi manual. null = belum diisi. */
+/** Nilai tugas, teori, dan praktik satu peserta di satu mata pelajaran, skala 0-100, diisi manual. null = belum diisi. */
 export interface SubjectGrade {
   registrationId: string
   subjectId: string
@@ -337,5 +337,15 @@ export interface Company { id: string; name: string; category: string; address: 
 export interface Placement { id: string; registrationId: string; companyId: string; kind: 'magang' | 'kerja'; position: string; startDate: string; endDate: string; score: number | null; status: 'berjalan' | 'selesai' | 'batal'; notes: string }
 export interface CashTx { id: string; direction: 'masuk' | 'keluar'; category: string; date: string; amount: number; description: string; createdAt: string }
 export interface LogbookEntry { id: string; placementId: string; date: string; activity: string; learning: string; hours: number; status: 'diajukan' | 'disetujui' | 'revisi'; reviewerNote: string; reviewedAt: string }
+
+/** Data diri instruktur. Nama, NIK, tanggal lahir, HP, dan email ada di User. */
+export interface StaffProfile {
+  userId: string; birthPlace: string; gender: '' | 'L' | 'P'; marital: '' | 'belum_kawin' | 'kawin' | 'cerai_hidup' | 'cerai_mati'
+  religion: string; address: string; photoFileId: string; cvFileId: string; updatedAt: string
+}
+/** Sertifikat pendukung instruktur (boleh lebih dari satu). */
+export interface StaffCert { id: string; userId: string; fileId: string; label: string; createdAt: string }
+export const MARITAL_LABEL: Record<Exclude<StaffProfile['marital'], ''>, string> = { belum_kawin: 'Belum kawin', kawin: 'Kawin', cerai_hidup: 'Cerai hidup', cerai_mati: 'Cerai mati' }
+export const RELIGIONS = ['Islam', 'Kristen Protestan', 'Katolik', 'Hindu', 'Buddha', 'Konghucu'] as const
 
 export interface NewsItem { id: string; title: string; body: string; audience: string[]; startsOn: string; endsOn: string; active: boolean; createdAt: string; read: boolean; eligible: boolean; readCount: number }

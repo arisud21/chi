@@ -1,7 +1,8 @@
 import { IconArrowLeft, IconCheck, IconCopy, IconFileSpreadsheet, IconPlayerPlay, IconTrash, IconUserPlus, IconX } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ask, Badge, Empty, Field, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct, useToast } from '../../components/ui'
+import { BiodataPdf } from '../../components/BiodataPdf'
+import { ask, Badge, Empty, Field, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct, useQueryParam, useToast } from '../../components/ui'
 import { AngkatanFilter, angkatanKe, cocokAngkatan, useAngkatan } from '../../lib/angkatan'
 import { DOC_KINDS, DOC_LABEL, assignBatch, cancelRegistration, changeProgram, createPendaftar, deletePeserta, type PendaftarCreated, type PendaftarInput, docsComplete, issueNip, remindProfile, rejectPayment, removeDocument, resumeRegistrationAdmin, saveProfileAsAdmin, setFollowUp, useStore, verifyPayment } from '../../lib/store'
 import type { Registration } from '../../lib/types'
@@ -76,7 +77,7 @@ export function EditDataPeserta() {
   return (
     <>
       {back}
-      <PageHeader title={`Ubah data diri: ${user.name}`} sub="Admin boleh mengoreksi semua isian, termasuk NIK dan tanggal lahir. Perubahan tercatat di audit log." />
+      <PageHeader title={`Ubah data diri: ${user.name}`} sub="Admin boleh mengoreksi semua isian, termasuk NIK dan tanggal lahir. Perubahan tercatat di audit log." action={<BiodataPdf userId={user.id} name={user.name} />} />
       <ProfileForm key={user.id} user={user} profile={profile} lockIdentity={false} canEditEmail={s.users.find((u) => u.id === s.sessionUserId)?.role === 'super_admin'} submitLabel="Simpan perubahan"
         onSubmit={(fields) => saveProfileAsAdmin(user.id, fields)} savedMessage="Data diri peserta diperbarui." onSaved={() => nav('/admin/peserta')} />
     </>
@@ -106,7 +107,8 @@ function BatchPicker({ r, canAssign }: { r: Registration; canAssign: boolean }) 
  */
 export function Pendaftar() {
   const role = useStore((x) => x.users.find((u) => u.id === x.sessionUserId)?.role)
-  const [tab, setTab] = useState<'tahapan' | 'bayar'>('tahapan')
+  const qTab = useQueryParam('tab')
+  const [tab, setTab] = useState<'tahapan' | 'bayar'>(qTab === 'bayar' ? 'bayar' : 'tahapan')
   if (role === 'admin_keuangan') {
     return <RekapBayarDaftar />
   }
@@ -138,7 +140,8 @@ const FEE_LABEL: Record<FeeState, { label: string; cls: string }> = {
 function RekapBayarDaftar() {
   const s = useStore((x) => x)
   const act = useAct()
-  const [f, setF] = useState<'all' | FeeState>('all')
+  const qBayar = useQueryParam('bayar')
+  const [f, setF] = useState<'all' | FeeState>(qBayar in FEE_LABEL ? qBayar as FeeState : 'all')
   const [q, setQ] = useState('')
   const [rej, setRej] = useState<string | null>(null)
   const [ver, setVer] = useState<{ id: string; amount: number; due: number; uploaded: number } | null>(null) // verifikasi dengan nominal yang bisa disesuaikan
@@ -382,7 +385,8 @@ function TahapanPendaftar() {
   const s = useStore((x) => x)
   const me = s.users.find((u) => u.id === s.sessionUserId)!
   const act = useAct()
-  const [f, setF] = useState<'all' | RekapStatus>('all')
+  const qStatus = useQueryParam('status')
+  const [f, setF] = useState<'all' | RekapStatus>(REKAP.some(([k]) => k === qStatus) ? qStatus as RekapStatus : 'all')
   const [q, setQ] = useState('')
   const [view, setView] = useState<string | null>(null)
   const [progReg, setProgReg] = useState<Registration | null>(null)
@@ -492,7 +496,8 @@ export function PesertaList() {
   const s = useStore((x) => x)
   const act = useAct()
   const [q, setQ] = useState('')
-  const [batch, setBatch] = useState('all')
+  const qBatch = useQueryParam('batch')
+  const [batch, setBatch] = useState(qBatch && s.batches.some((b) => b.id === qBatch) ? qBatch : 'all')
   const [view, setView] = useState<string | null>(null)
   const [progReg, setProgReg] = useState<Registration | null>(null)
   const canAssign = ['super_admin', 'admin_pendaftaran'].includes(s.users.find((u) => u.id === s.sessionUserId)?.role ?? '')
@@ -525,7 +530,7 @@ export function PesertaList() {
               <td className="whitespace-nowrap text-right">
                 {canAssign && regs[0] && (docsComplete(s, user.id) ? <span className="mr-2 text-xs text-muted">Program terkunci</span> : <button className="btn-ghost !min-h-9" onClick={() => setProgReg(regs[0])}>Ubah program</button>)}{' '}
                 <WaButton compact phone={user.phone} text={stageMessage(user.name, 'aktif') + (regs[0]?.nip ? `\n(NIP ${regs[0].nip})` : '')} />{' '}
-                <button className="btn-ghost !min-h-9" onClick={() => setView(user.id)}>Detail</button>{canAssign && <> <button className="btn-ghost !min-h-9 text-red-700" aria-label={`Hapus ${user.name}`} onClick={() => setHapus(user.id)}><IconTrash size={16} /></button></>}
+                <button className="btn-ghost !min-h-9" onClick={() => setView(user.id)}>Detail</button>{' '}<BiodataPdf compact userId={user.id} name={user.name} />{canAssign && <> <button className="btn-ghost !min-h-9 text-red-700" aria-label={`Hapus ${user.name}`} onClick={() => setHapus(user.id)}><IconTrash size={16} /></button></>}
               </td>
             </tr>
           ))}

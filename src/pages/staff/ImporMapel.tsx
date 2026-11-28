@@ -8,10 +8,8 @@ type Source = 'link' | 'file' | 'tempel'
 const SOURCES: [Source, string][] = [['link', 'Tautan Google Sheets'], ['file', 'Unggah file CSV'], ['tempel', 'Tempel dari spreadsheet']]
 export const SUBJECT_KIND: Record<string, string> = { teori: 'Teori', praktik: 'Praktik', teori_praktik: 'Teori dan praktik' }
 
-/** Mata pelajaran berketerangan "Kelas Gabungan" dipakai bersama oleh semua pelatihan, jadi cukup diimpor satu kali. */
-const isShared = (r: ParsedSubject) => /gabungan/i.test(r.description)
-
-interface Block { title: string; rows: ParsedSubject[]; shared: boolean; note?: string }
+/** Satu bagian spreadsheet (satu pelatihan). Mata pelajaran berketerangan "Kelas Gabungan" ikut diimpor ke kurikulum pelatihannya; penggabungan kelasnya diatur di Jadwal pembelajaran. */
+interface Block { title: string; rows: ParsedSubject[] }
 
 /** Impor bank mata pelajaran dari spreadsheet: baca, petakan tiap bagian ke pelatihan, tinjau, lalu impor. */
 export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumId }: { open: boolean; onClose: () => void; defaultProgramId: string; defaultCurriculumId: string }) {
@@ -23,7 +21,7 @@ export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumI
   const [pasted, setPasted] = useState('')
   const [busy, setBusy] = useState(false)
   const [blocks, setBlocks] = useState<Block[] | null>(null)
-  const [target, setTarget] = useState<string[]>([]) // id pelatihan per blok; untuk blok gabungan: 'on' atau ''
+  const [target, setTarget] = useState<string[]>([]) // id pelatihan per blok
   const [curTarget, setCurTarget] = useState<string[]>([]) // id kurikulum tujuan per blok
   const [update, setUpdate] = useState(true)
   /** Kurikulum bawaan untuk pelatihan: yang sedang dibuka di bank mata pelajaran, atau kurikulum terbaru pelatihan itu. */
@@ -36,30 +34,15 @@ export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumI
   const load = (text: string) => {
     const parsed = parseSubjects(text)
     if (!parsed.length) return toast('Format tidak dikenali. Pastikan ada judul kolom: No, Kode, Mata Kuliah, Jam/Pertemuan, Jumlah Pertemuan, Jumlah Jam.', 'err')
-    // Kelas gabungan dikumpulkan dari semua bagian dan digabung per nama, jadi hanya satu salinan.
-    const shared = new Map<string, ParsedSubject>()
-    const seen = new Map<string, number>()
-    const own = parsed.map((sec) => ({
-      title: sec.title, shared: false,
-      rows: sec.rows.filter((r) => {
-        if (!isShared(r)) return true
-        const key = r.name.trim().toLowerCase()
-        seen.set(key, (seen.get(key) ?? 0) + 1)
-        if (!shared.has(key)) shared.set(key, r)
-        return false
-      }),
-    })).filter((b) => b.rows.length > 0)
-    const list: Block[] = own
-    if (shared.size) list.push({ title: 'Kelas gabungan', shared: true, rows: [...shared.values()], note: `Berlaku untuk semua pelatihan dan diimpor sekali. Di spreadsheet muncul ${[...seen.values()].reduce((a, b) => Math.max(a, b), 1)} kali.` })
+    const list: Block[] = parsed.map((sec) => ({ title: sec.title, rows: sec.rows })).filter((b) => b.rows.length > 0)
     setBlocks(list)
     // Petakan otomatis ke pelatihan dengan nama paling mirip. Di bawah 0.7 dibiarkan kosong agar dipilih manual.
     const t = list.map((b) => {
-      if (b.shared) return 'on'
       const best = programs.map((p) => ({ id: p.id, sc: titleScore(b.title, p.title) })).sort((a, c) => c.sc - a.sc)[0]
-      return best && best.sc >= 0.7 ? best.id : own.length === 1 ? defaultProgramId : ''
+      return best && best.sc >= 0.7 ? best.id : list.length === 1 ? defaultProgramId : ''
     })
     setTarget(t)
-    setCurTarget(list.map((b, i) => (b.shared || !t[i] ? '' : defaultCur(t[i]))))
+    setCurTarget(list.map((_, i) => (t[i] ? defaultCur(t[i]) : '')))
   }
 
   const readLink = async () => {
@@ -76,18 +59,18 @@ export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumI
     load(await file.text())
   }
 
-  const exists = (shared: boolean, cid: string, name: string) => s.subjects.some((x) => (shared ? x.programId === '' : x.curriculumId === cid) && x.name.trim().toLowerCase() === name.trim().toLowerCase())
+  const exists = (cid: string, name: string) => s.subjects.some((x) => x.curriculumId === cid && x.name.trim().toLowerCase() === name.trim().toLowerCase())
   const plan = useMemo(() => (blocks ?? []).map((b, i) => b.rows.map((r) => {
-    const t = target[i] && (b.shared || curTarget[i])
-    const state = !t ? 'skip' : r.problems.length ? 'bad' : exists(b.shared, curTarget[i], r.name) ? (update ? 'update' : 'same') : 'new'
+    const t = target[i] && curTarget[i]
+    const state = !t ? 'skip' : r.problems.length ? 'bad' : exists(curTarget[i], r.name) ? (update ? 'update' : 'same') : 'new'
     return { r, state }
   })), [blocks, target, curTarget, update, s.subjects]) // eslint-disable-line react-hooks/exhaustive-deps
   const count = (st: string) => plan.flat().filter((x) => x.state === st).length
   const importable = count('new') + count('update')
 
   const run = async () => {
-    const items = (blocks ?? []).flatMap((b, i) => target[i] && (b.shared || curTarget[i])
-      ? b.rows.filter((r) => !r.problems.length).map((r) => ({ shared: b.shared, programId: b.shared ? '' : target[i], curriculumId: b.shared ? '' : curTarget[i], code: r.code, name: r.name, kind: r.kind, hours: r.hours, hoursPerMeeting: r.hoursPerMeeting, meetings: r.meetings, description: r.description }))
+    const items = (blocks ?? []).flatMap((b, i) => target[i] && curTarget[i]
+      ? b.rows.filter((r) => !r.problems.length).map((r) => ({ programId: target[i], curriculumId: curTarget[i], code: r.code, name: r.name, kind: r.kind, hours: r.hours, hoursPerMeeting: r.hoursPerMeeting, meetings: r.meetings, description: r.description }))
       : [])
     setBusy(true)
     const res = await importSubjects(items, update)
@@ -115,7 +98,7 @@ export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumI
     <Modal open={open} size="xl" title="Impor bank mata pelajaran" onClose={close}>
       {!blocks ? (
         <div className="space-y-4">
-          <p className="text-sm text-muted">Format mengikuti spreadsheet kurikulum: satu bagian per pelatihan (misalnya ROOM DIVISION), dengan kolom No, Kode, Mata Kuliah, Keterangan, Jam/Pertemuan, Jumlah Pertemuan, dan Jumlah Jam Per Program. Mata pelajaran berketerangan <b>Kelas Gabungan</b> diimpor sekali dan bisa dipakai di semua pelatihan.</p>
+          <p className="text-sm text-muted">Format mengikuti spreadsheet kurikulum: satu bagian per pelatihan (misalnya ROOM DIVISION), dengan kolom No, Kode, Mata Kuliah, Keterangan, Jam/Pertemuan, Jumlah Pertemuan, dan Jumlah Jam Per Program. Mata pelajaran berketerangan <b>Kelas Gabungan</b> ikut diimpor ke kurikulum tiap pelatihan; kelasnya digabungkan di menu Jadwal pembelajaran.</p>
           <div role="tablist" aria-label="Sumber data" className="flex gap-1 overflow-x-auto border-b border-line">
             {SOURCES.map(([k, text]) => <button key={k} role="tab" aria-selected={src === k} onClick={() => setSrc(k)} className={`-mb-px min-h-11 shrink-0 border-b-2 px-4 text-sm font-semibold ${src === k ? 'border-brand-600 text-brand-700' : 'border-transparent text-muted hover:text-ink'}`}>{text}</button>)}
           </div>
@@ -144,10 +127,8 @@ export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumI
           {blocks.map((b, i) => (
             <section key={i} className="space-y-2" aria-label={`Bagian ${b.title}`}>
               <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-0 flex-1"><p className="text-xs font-semibold uppercase tracking-wide text-muted">{b.shared ? 'Dipakai bersama' : 'Bagian di spreadsheet'}</p><p className="font-bold">{b.title}</p>{b.note && <p className="text-xs text-muted">{b.note}</p>}</div>
-                {b.shared
-                  ? <label className="flex min-h-11 items-center gap-2 text-sm font-medium"><input type="checkbox" className="size-4 accent-brand-600" checked={target[i] === 'on'} onChange={(e) => setTarget(target.map((x, j) => (j === i ? (e.target.checked ? 'on' : '') : x)))} />Impor ke semua pelatihan</label>
-                  : <>
+                <div className="min-w-0 flex-1"><p className="text-xs font-semibold uppercase tracking-wide text-muted">Bagian di spreadsheet</p><p className="font-bold">{b.title}</p></div>
+                <>
                     <label className="block min-w-60"><span className="label">Masuk ke pelatihan</span>
                       <select className="input" value={target[i] ?? ''} onChange={(e) => pickProgram(i, e.target.value)}>
                         <option value="">Lewati bagian ini</option>{programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
@@ -159,7 +140,7 @@ export function ImporMapel({ open, onClose, defaultProgramId, defaultCurriculumI
                         {s.curricula.filter((c) => c.programId === target[i]).map((c) => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (nonaktif)'}</option>)}
                       </select>
                     </label>}
-                  </>}
+                </>
               </div>
               <Table bare head={['Kode', 'Mata pelajaran', 'Jenis', 'Jam/pertemuan', 'Pertemuan', 'Jam total', 'Status']}>
                 {b.rows.map((r, k) => {

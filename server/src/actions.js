@@ -6,6 +6,7 @@ import { newsActions } from './news.js'
 import { chiTodayActions } from './chiToday.js'
 import { placementActions } from './placement.js'
 import { kasActions } from './kas.js'
+import { staffProfileActions } from './staffProfile.js'
 import { MIN_REENROLL_DEFAULT, REG_FEE_DEFAULT, admissionActions, allocatePayment, applyScheduleDelta, buildSchedule, discountsOf, regFeeDue, scheduleCredit, issueNip, notify, reenrollShortfall, recalcAttendancePct, syncFinal, validWeights, remainingTotal, sweepAdmissions, syncGraduation, unattendedSessions } from './admission.js'
 
 const ALL_STAFF = ['super_admin', 'admin_pendaftaran', 'admin_keuangan', 'akademik', 'instruktur']
@@ -20,11 +21,16 @@ const digit = (v, label) => { if (v === '' || v == null) return null; const n = 
 /** Validasi satu mata pelajaran, dipakai simpan satu per satu dan impor massal. */
 const cleanSubject = (x) => {
   if (!['teori', 'praktik', 'teori_praktik'].includes(x.kind)) fail('Jenis harus teori, praktik, atau teori dan praktik.')
-  const opt = (v, max, label) => { if (v === '' || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > max) fail(`${label} harus bilangan bulat 1 sampai ${max}.`); return n }
-  return {
-    name: str(x.name, 120), code: str(x.code, 12, false) || null, kind: x.kind, hours: num(x.hours, 1, 500),
-    hoursPerMeeting: opt(x.hoursPerMeeting, 24, 'Jam per pertemuan'), meetings: opt(x.meetings, 60, 'Jumlah pertemuan'), description: str(x.description, 255, false),
-  }
+  // Jumlah pertemuan dan jam total tidak dibatasi; batas atas hanya kapasitas kolom INT di database.
+  const INT_MAX = 2_147_483_647
+  const opt = (v, max, label) => { if (v === '' || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > max) fail(max === INT_MAX ? `${label} harus bilangan bulat minimal 1.` : `${label} harus bilangan bulat 1 sampai ${max}.`); return n }
+  const hoursPerMeeting = opt(x.hoursPerMeeting, 24, 'Jam per pertemuan')
+  const meetings = opt(x.meetings, INT_MAX, 'Jumlah pertemuan')
+  // Bila jam per pertemuan dan jumlah pertemuan terisi, jam total = hasil kalinya (isian jam total diabaikan).
+  const hours = hoursPerMeeting != null && meetings != null ? hoursPerMeeting * meetings : num(x.hours, 1, INT_MAX)
+  if (!Number.isInteger(hours)) fail('Jumlah jam per program harus bilangan bulat.')
+  if (hours > INT_MAX) fail('Jumlah jam per program terlalu besar.')
+  return { name: str(x.name, 120), code: str(x.code, 12, false) || null, kind: x.kind, hours, hoursPerMeeting, meetings, description: str(x.description, 255, false) }
 }
 const DAYS = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min']
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -73,6 +79,7 @@ export const actions = {
   ...admissionActions,
   ...placementActions,
   ...kasActions,
+  ...staffProfileActions,
   ...newsActions,
   ...chiTodayActions,
   /* ---------- registrasi dan pembayaran ---------- */
@@ -223,8 +230,7 @@ export const actions = {
       if (Number(n)) fail('Sudah ada pembayaran registrasi atau cicilan, jadi paket tidak bisa diganti. Batalkan dulu catatan pembayarannya bila memang perlu.')
       const [p] = await cq(c, 'SELECT price, title FROM programs WHERE id = ?', [r.program_id])
       const s = await getSettings(c)
-      // Sama dengan pilihan paket oleh peserta: biaya program + biaya tambahan, dikurangi biaya pendaftaran yang sudah dibayar.
-      // Angkatan bebas biaya pendaftaran tidak punya potongan: biaya registrasi tetap penuh.
+      // Sama dengan pilihan paket oleh peserta: biaya program + biaya tambahan (biaya pendaftaran ditagih terpisah, tidak mengurangi).
       // Potongan yang diberikan keuangan ikut mengurangi total.
       const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [r.program_id, r.user_id])
       const total = Math.max(0, Number(p.price) + Number(extra) - await scheduleCredit(c, r, s))
@@ -254,8 +260,7 @@ export const actions = {
         if (b?.free_reg_fee) fail(`Angkatan ${b.code} dibebaskan dari biaya pendaftaran, jadi tidak perlu dicatat.`)
         const [ok] = await cq(c, "SELECT id FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified' LIMIT 1", [r.id])
         if (ok) fail('Biaya pendaftaran sudah tercatat lunas.')
-        const [sched] = await cq(c, 'SELECT id FROM installments WHERE registration_id = ? LIMIT 1', [r.id])
-        if (sched) fail('Paket biaya registrasi sudah ditetapkan tanpa potongan biaya pendaftaran. Catat biaya pendaftaran sebelum menetapkan paket, atau tetapkan ulang paketnya setelah ini.')
+        // Biaya pendaftaran terpisah dari cicilan biaya pelatihan, jadi boleh dicatat sebelum atau sesudah paket ditetapkan.
         kind = 'pendaftaran'; due = await regFeeDue(c, r, s)
         if (due <= 0) fail('Biaya pendaftaran peserta ini sudah dihapus seluruhnya lewat potongan, jadi tidak perlu dicatat.')
       } else {
@@ -527,8 +532,10 @@ export const actions = {
   saveSubject: {
     roles: ['akademik', 'super_admin'],
     fn: (ctx, x) => tx(async (c) => {
-      const pid = x.programId || null // kosong = kelas gabungan, berlaku untuk semua pelatihan
-      if (pid) { const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [pid]); if (!p) fail('Pilih pelatihan.') }
+      // Setiap mata pelajaran milik satu kurikulum pelatihan. Kelas gabungan tidak lagi dibuat di bank, tetapi diatur di Jadwal pembelajaran.
+      const pid = x.programId || null
+      if (!pid) fail('Pilih pelatihan dan kurikulum. Kelas gabungan diatur di menu Jadwal pembelajaran.')
+      { const [p] = await cq(c, 'SELECT id FROM programs WHERE id = ? AND deleted_at IS NULL', [pid]); if (!p) fail('Pilih pelatihan.') }
       const [cur] = pid ? await cq(c, 'SELECT id FROM curricula WHERE id = ? AND program_id = ?', [x.curriculumId ?? '', pid]) : []
       if (pid && !cur) fail('Pilih kurikulum pelatihan.')
       const cid = cur?.id ?? null
@@ -554,6 +561,7 @@ export const actions = {
       const out = { added: 0, updated: 0, skipped: 0 }
       const curs = new Map()
       for (const x of items) {
+        if (x.shared) fail('Kelas gabungan tidak lagi diimpor ke bank mata pelajaran. Impor ke kurikulum tiap pelatihan, lalu atur kelas gabungannya di Jadwal pembelajaran.')
         const pid = x.shared ? null : String(x.programId ?? '')
         const cid = x.shared ? null : String(x.curriculumId ?? '')
         const key = `${pid}/${cid}`
@@ -636,11 +644,12 @@ export const actions = {
     fn: (ctx, batchId, subjectId, all) => tx(async (c) => {
       const [bs] = await cq(c, 'SELECT bs.*, b.code, sj.name FROM batch_subjects bs JOIN batches b ON b.id = bs.batch_id JOIN subjects sj ON sj.id = bs.subject_id WHERE bs.batch_id = ? AND bs.subject_id = ? FOR UPDATE', [batchId, subjectId])
       if (!bs) fail('Jadwal tidak ditemukan.')
-      const targets = all && bs.group_id ? await cq(c, 'SELECT bs.batch_id, b.code FROM batch_subjects bs JOIN batches b ON b.id = bs.batch_id WHERE bs.group_id = ? FOR UPDATE', [bs.group_id]) : [{ batch_id: batchId, code: bs.code }]
+      // Anggota kelas gabungan bisa memakai mata pelajaran dari kurikulumnya sendiri, jadi tiap baris dihapus dengan subject_id-nya.
+      const targets = all && bs.group_id ? await cq(c, 'SELECT bs.batch_id, bs.subject_id, b.code FROM batch_subjects bs JOIN batches b ON b.id = bs.batch_id WHERE bs.group_id = ? FOR UPDATE', [bs.group_id]) : [{ batch_id: batchId, subject_id: subjectId, code: bs.code }]
       for (const t of targets) {
-        const [{ n }] = await cq(c, 'SELECT COUNT(*) n FROM class_sessions WHERE batch_id = ? AND subject_id = ?', [t.batch_id, subjectId])
+        const [{ n }] = await cq(c, 'SELECT COUNT(*) n FROM class_sessions WHERE batch_id = ? AND subject_id = ?', [t.batch_id, t.subject_id])
         if (Number(n)) fail(`"${bs.name}" di angkatan ${t.code} sudah punya ${n} pertemuan sehingga jadwalnya tidak bisa dihapus.`)
-        await cq(c, 'DELETE FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [t.batch_id, subjectId])
+        await cq(c, 'DELETE FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [t.batch_id, t.subject_id])
         await refreshBatchSummary(c, t.batch_id)
       }
       // Grup yang tersisa satu angkatan bukan lagi kelas gabungan.
@@ -780,7 +789,7 @@ export const actions = {
     }),
   },
   /**
-   * Nilai teori (UTS) dan praktik (UAS) satu peserta di satu mata pelajaran. Hanya pengampu mata pelajaran itu (atau Akademik dan super admin) yang boleh mengisi.
+   * Nilai teori dan praktik satu peserta di satu mata pelajaran. Hanya pengampu mata pelajaran itu (atau Akademik dan super admin) yang boleh mengisi.
    * Nilai teori dan praktik program (grades) ikut dihitung sebagai rata-rata seluruh mata pelajaran, jadi alur kirim dan validasi tidak berubah.
    * Kosong (null) = belum diisi.
    */
@@ -1307,7 +1316,7 @@ async function insertPeserta(c, actor, x, bulk = false) {
   return { nip }
 }
 /**
- * Simpan satu jadwal (tambah atau ubah). Untuk mata pelajaran kelas gabungan, x.batchIds berisi semua angkatan (lintas program)
+ * Simpan satu jadwal (tambah atau ubah). Untuk kelas gabungan, x.batchIds berisi semua angkatan (boleh lintas pelatihan)
  * yang ikut kelas itu: semuanya mendapat instruktur, hari, jam, dan ruang yang sama dan diikat dengan group_id.
  */
 export async function upsertJadwal(c, x) {
@@ -1332,17 +1341,18 @@ export async function upsertJadwal(c, x) {
   const a = { days, start: x.startTime, end: x.endTime }
   const sameRoom = (r) => room && r && room.toLowerCase() === String(r).toLowerCase()
 
-  // Angkatan tujuan: hanya kelas gabungan yang boleh lebih dari satu angkatan.
-  const shared = sj.program_id == null
-  const ids = [...new Set([bt.id, ...(shared && Array.isArray(x.batchIds) ? x.batchIds.map(String) : [])])]
-  const group = shared && ids.length > 1 ? ex?.group_id || uid() : null
+  // Kelas gabungan diatur di sini (bukan di bank mata pelajaran): angkatan lain, juga dari pelatihan lain, ikut kelas yang sama
+  // dengan instruktur, hari, jam, dan ruang yang sama, diikat dengan group_id. Tiap angkatan memakai mata pelajaran bernama sama
+  // dari kurikulumnya sendiri bila ada, sehingga nilainya tetap tercatat di kurikulum masing-masing.
+  const ids = [...new Set([bt.id, ...(Array.isArray(x.batchIds) ? x.batchIds.map(String) : [])])]
+  const group = ids.length > 1 ? ex?.group_id || uid() : null
   // Angkatan yang dikeluarkan dari grup saat diubah: jadwalnya dihapus bila belum ada pertemuan.
   if (ex?.group_id) {
-    for (const o of await cq(c, 'SELECT bs.batch_id, b.code FROM batch_subjects bs JOIN batches b ON b.id = bs.batch_id WHERE bs.group_id = ? AND bs.subject_id = ?', [ex.group_id, sj.id])) {
+    for (const o of await cq(c, 'SELECT bs.batch_id, bs.subject_id, b.code FROM batch_subjects bs JOIN batches b ON b.id = bs.batch_id WHERE bs.group_id = ?', [ex.group_id])) {
       if (ids.includes(o.batch_id)) continue
-      const [{ n }] = await cq(c, 'SELECT COUNT(*) n FROM class_sessions WHERE batch_id = ? AND subject_id = ?', [o.batch_id, sj.id])
+      const [{ n }] = await cq(c, 'SELECT COUNT(*) n FROM class_sessions WHERE batch_id = ? AND subject_id = ?', [o.batch_id, o.subject_id])
       if (Number(n)) fail(`Angkatan ${o.code} sudah punya pertemuan "${sj.name}", jadi tidak bisa dikeluarkan dari kelas gabungan.`)
-      await cq(c, 'DELETE FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [o.batch_id, sj.id])
+      await cq(c, 'DELETE FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [o.batch_id, o.subject_id])
       await refreshBatchSummary(c, o.batch_id)
     }
   }
@@ -1351,26 +1361,30 @@ export async function upsertJadwal(c, x) {
     const [t] = id === bt.id ? [bt] : await cq(c, 'SELECT * FROM batches WHERE id = ? FOR UPDATE', [id])
     if (!t) fail('Ada angkatan tujuan yang tidak ditemukan.')
     if (['finished', 'cancelled'].includes(t.status)) fail(`Angkatan ${t.code} sudah selesai atau dibatalkan.`)
-    const [own] = id === bt.id ? [ex] : await cq(c, 'SELECT * FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [id, sj.id])
+    // Mata pelajaran untuk angkatan ini: yang bernama sama di kurikulumnya, atau mata pelajaran yang dipilih bila tidak ada.
+    const [match] = id !== bt.id && t.curriculum_id ? await cq(c, 'SELECT id, name, meetings FROM subjects WHERE curriculum_id = ? AND is_active = 1 AND LOWER(name) = LOWER(?) LIMIT 1', [t.curriculum_id, sj.name]) : []
+    const tsj = match ?? sj
+    const tSessions = match && match.meetings != null ? Number(match.meetings) : sessions
+    const [own] = id === bt.id ? [ex] : await cq(c, 'SELECT * FROM batch_subjects WHERE batch_id = ? AND subject_id = ?', [id, tsj.id])
     if (own && id !== bt.id && (!own.group_id || own.group_id !== group) && !x.overwrite) fail(`"${sj.name}" sudah punya jadwal sendiri di angkatan ${t.code}. Hapus atau ubah di sana dulu.`)
     // Bentrok: instruktur atau ruang yang sama pada hari dan jam yang beririsan, di angkatan ini atau angkatan lain yang periodenya beririsan.
-    // Mata pelajaran yang sama di angkatan lain boleh berbarengan (itulah kelas gabungan).
+    // Anggota kelas gabungan yang sama (dan mata pelajaran yang sama di angkatan lain) boleh berbarengan.
     const others = await cq(c, `SELECT bs.*, b.code, sj.name FROM batch_subjects bs JOIN batches b ON b.id = bs.batch_id JOIN subjects sj ON sj.id = bs.subject_id
       WHERE NOT (bs.batch_id = ? AND bs.subject_id = ?) AND (bs.batch_id = ? OR (b.status NOT IN ('finished','cancelled') AND b.start_date <= ? AND b.end_date >= ?)) AND bs.start_time IS NOT NULL`,
-      [t.id, sj.id, t.id, t.end_date, t.start_date])
+      [t.id, tsj.id, t.id, t.end_date, t.start_date])
     for (const o of others) {
       const here = o.batch_id === t.id
-      if (!here && o.subject_id === sj.id) continue
+      if (!here && (o.subject_id === tsj.id || (group && o.group_id === group))) continue
       if (!clash(a, { days: String(o.schedule_days).split(','), start: hm(o.start_time), end: hm(o.end_time) })) continue
       const where = here ? ` di angkatan ${t.code}` : ` di angkatan ${o.code}`
       if (o.instructor_id === ins.id) fail(`Bentrok: ${ins.name} sudah mengajar "${o.name}"${where} pada ${o.schedule_days} ${hm(o.start_time)}-${hm(o.end_time)}.`)
       if (sameRoom(o.room)) fail(`Bentrok: ruang ${room} sudah dipakai "${o.name}"${where} pada ${o.schedule_days} ${hm(o.start_time)}-${hm(o.end_time)}.`)
     }
-    const [{ n: used }] = await cq(c, 'SELECT COUNT(*) n FROM class_sessions WHERE batch_id = ? AND subject_id = ?', [t.id, sj.id])
-    if (sessions < Number(used)) fail(`"${sj.name}" di angkatan ${t.code} sudah punya ${used} pertemuan, jadi jumlahnya tidak bisa di bawah itu.`)
+    const [{ n: used }] = await cq(c, 'SELECT COUNT(*) n FROM class_sessions WHERE batch_id = ? AND subject_id = ?', [t.id, tsj.id])
+    if (tSessions < Number(used)) fail(`"${sj.name}" di angkatan ${t.code} sudah punya ${used} pertemuan, jadi jumlahnya tidak bisa di bawah itu.`)
     await cq(c, `INSERT INTO batch_subjects (batch_id, subject_id, sessions_planned, instructor_id, schedule_days, start_time, end_time, room, group_id) VALUES (?,?,?,?,?,?,?,?,?)
       ON DUPLICATE KEY UPDATE sessions_planned = VALUES(sessions_planned), instructor_id = VALUES(instructor_id), schedule_days = VALUES(schedule_days),
-      start_time = VALUES(start_time), end_time = VALUES(end_time), room = VALUES(room), group_id = VALUES(group_id)`, [t.id, sj.id, sessions, ins.id, days.join(','), x.startTime, x.endTime, room, group])
+      start_time = VALUES(start_time), end_time = VALUES(end_time), room = VALUES(room), group_id = VALUES(group_id)`, [t.id, tsj.id, tSessions, ins.id, days.join(','), x.startTime, x.endTime, room, group])
     await refreshBatchSummary(c, t.id)
     codes.push(t.code)
   }

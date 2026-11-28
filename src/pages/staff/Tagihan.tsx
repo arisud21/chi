@@ -111,7 +111,7 @@ export function RincianBayar() {
   const openTotal = openItems.reduce((t, i) => t + (i.amount ?? 0), 0)
   const today = new Date().toISOString().slice(0, 10)
 
-  // Dari apa total terdiri: biaya program + biaya tambahan - potongan - biaya pendaftaran (yang dicicil). Rumus sama dengan server.
+  // Dari apa total terdiri: biaya program + biaya tambahan - potongan (yang dicicil). Biaya pendaftaran ditagih terpisah. Rumus sama dengan server.
   const regDue = regFeeFor(s, r)
   const extras = s.feeItems.filter((x) => x.active && (x.userId ? x.userId === r.userId : (!x.programId || x.programId === r.programId)))
   const price = prog?.price ?? r.priceSnapshot
@@ -119,13 +119,10 @@ export function RincianBayar() {
   const cuts = discountsFor(s, r.id)
   const otherCuts = cuts.filter((d) => d.target !== 'pendaftaran')
   const regCut = cuts.filter((d) => d.target === 'pendaftaran').reduce((t, d) => t + d.amount, 0)
-  // Biaya pendaftaran mengurangi cicilan bila sudah dibayar, atau (pendaftar biasa) diperkirakan akan dibayar sebelum paket dipilih.
-  const regLine = batch?.freeRegFee ? 0 : credit || (r.source === 'admin' ? 0 : regDue)
-  const regCutLine = credit > 0 || regDue === 0 || r.source !== 'admin' ? regCut : 0
   const installTotal = s.installments.filter((i) => i.registrationId === r.id).reduce((t, i) => t + i.amount, 0)
   const hasSchedule = installTotal > 0
   const grand = price + extras.reduce((t, x) => t + x.amount, 0)
-  const expectedSchedule = Math.max(0, grand - otherCuts.reduce((t, d) => t + d.amount, 0) - regLine - regCutLine)
+  const expectedSchedule = Math.max(0, grand - otherCuts.reduce((t, d) => t + d.amount, 0))
   const drifted = hasSchedule && installTotal !== expectedSchedule
 
   return (
@@ -198,14 +195,9 @@ export function RincianBayar() {
           {extras.map((x) => <div key={x.id} className="flex justify-between gap-3"><dt>{x.name}</dt><dd className="tabular-nums">{rupiah(x.amount)}</dd></div>)}
           <div className="flex justify-between gap-3 border-t border-line pt-1.5 font-semibold"><dt>Total keseluruhan</dt><dd className="tabular-nums">{rupiah(grand)}</dd></div>
           {otherCuts.map((d) => <div key={d.id} className="flex justify-between gap-3 text-sky-800"><dt>Potongan {d.label.toLowerCase()}</dt><dd className="tabular-nums">- {rupiah(d.amount)}</dd></div>)}
-          {batch?.freeRegFee
-            ? <div className="flex justify-between gap-3"><dt>Biaya pendaftaran dibebaskan untuk angkatan {batch.code} (tidak mengurangi biaya registrasi)</dt><dd className="tabular-nums">- {rupiah(0)}</dd></div>
-            : <>
-              {regLine > 0 && <div className="flex justify-between gap-3"><dt>Dikurangi biaya pendaftaran{credit ? '' : ' (belum dibayar)'}</dt><dd className="tabular-nums">- {rupiah(regLine)}</dd></div>}
-              {regCutLine > 0 && <div className="flex justify-between gap-3 text-sky-800"><dt>Potongan biaya pendaftaran</dt><dd className="tabular-nums">- {rupiah(regCutLine)}</dd></div>}
-            </>}
-          <div className="flex justify-between gap-3 border-t border-line pt-1.5 font-bold"><dt>Dicicil saat registrasi ulang</dt><dd className="tabular-nums text-brand-700">{rupiah(hasSchedule ? installTotal : expectedSchedule)}</dd></div>
+          <div className="flex justify-between gap-3 border-t border-line pt-1.5 font-bold"><dt>Ditagih dan dicicil saat registrasi ulang</dt><dd className="tabular-nums text-brand-700">{rupiah(hasSchedule ? installTotal : expectedSchedule)}</dd></div>
         </dl>
+        <p className="mt-3 max-w-xl rounded-lg bg-canvas p-3 text-xs text-muted">Biaya pendaftaran berada di luar tagihan ini: {batch?.freeRegFee ? `dibebaskan untuk angkatan ${batch.code}` : credit ? `sudah dibayar ${rupiah(credit)}` : regDue === 0 ? 'dipotong seluruhnya' : `${rupiah(regDue)}, dibayar terpisah`}{regCut > 0 && !batch?.freeRegFee ? ` (setelah potongan ${rupiah(regCut)})` : ''}.</p>
         {drifted && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">Jadwal cicilan peserta ini dihitung dengan biaya saat ia memilih paket. Biaya program atau biaya tambahan sudah berubah sejak itu, sehingga total di atas berbeda dari jadwalnya.</p>}
         {!hasSchedule && <p className="mt-3 text-xs text-muted">Peserta belum memilih paket pembayaran, jadi angka ini perkiraan dari biaya saat ini.</p>}
       </section>
@@ -234,11 +226,11 @@ function PencatatanKeuangan({ regId }: { regId: string }) {
   const needReg = regDue > 0 && !regPaid
   const restReg = insts.reduce((t, i) => t + i.amount - i.paidAmount, 0)
   const [planId, setPlanId] = useState('')
-  const [f, setF] = useState({ kind: (needReg && !insts.length ? 'pendaftaran' : 'registrasi') as 'pendaftaran' | 'registrasi', amount: 0, transferDate: today, payerName: '', note: '' })
+  const [f, setF] = useState({ kind: (needReg ? 'pendaftaran' : 'registrasi') as 'pendaftaran' | 'registrasi', amount: 0, transferDate: today, payerName: '', note: '' })
   const [cancel, setCancel] = useState<string | null>(null)
   const [why, setWhy] = useState('')
   if (!me || !['super_admin', 'admin_keuangan'].includes(me.role)) return null
-  const kinds = [...(needReg && !insts.length ? [['pendaftaran', `Biaya pendaftaran (${rupiah(regDue)})`] as const] : []), ...(insts.length && restReg > 0 ? [['registrasi', `Biaya registrasi (sisa ${rupiah(restReg)})`] as const] : [])]
+  const kinds = [...(needReg ? [['pendaftaran', `Biaya pendaftaran (${rupiah(regDue)})`] as const] : []), ...(insts.length && restReg > 0 ? [['registrasi', `Biaya registrasi (sisa ${rupiah(restReg)})`] as const] : [])]
   const kind = kinds.some(([k]) => k === f.kind) ? f.kind : kinds[0]?.[0]
   return (
     <section className="card mt-6 p-5" aria-labelledby="catat">
@@ -256,7 +248,6 @@ function PencatatanKeuangan({ regId }: { regId: string }) {
                   <select className="input" required value={planId} onChange={(e) => setPlanId(e.target.value)}><option value="">Pilih paket</option>{plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
                 </label>
                 <button className="btn-primary" disabled={!planId}>Tetapkan</button>
-                {needReg && !insts.length && <p className="w-full text-xs text-amber-800">Bila biaya pendaftaran sudah dibayar, catat dulu sebelum menetapkan paket agar menjadi potongan biaya registrasi.</p>}
               </form>
             )}
         </div>
@@ -326,14 +317,12 @@ function CatatBiayaPendaftaran({ regId }: { regId: string }) {
   const live = imported ? r.stage === 'aktif' && ['active', 'completed'].includes(r.status) : ['pending_payment', 'waiting_verification', 'active'].includes(r.status)
   const verified = pays.some((p) => p.status === 'verified')
   const pending = pays.some((p) => p.status === 'submitted')
-  const hasPlan = s.installments.some((i) => i.registrationId === r.id)
   // Alasan formulir tidak ditampilkan; null berarti boleh mencatat.
   const blocked = !live ? 'Pendaftaran ini sudah tidak berjalan (mundur atau kedaluwarsa).'
     : batch?.freeRegFee ? `Angkatan ${batch.code} dibebaskan dari biaya pendaftaran, jadi tidak perlu dicatat.`
     : verified ? null
     : fee === 0 ? 'Biaya pendaftaran sudah dipotong seluruhnya, jadi tidak perlu dicatat.'
     : pending ? 'Pendaftar sudah mengunggah bukti pembayaran. Setujui atau tolak bukti di atas.'
-    : imported && hasPlan ? 'Paket biaya registrasi peserta ini sudah ditetapkan tanpa potongan biaya pendaftaran, jadi biaya pendaftaran tidak bisa dicatat lagi agar tagihannya tidak terhitung dua kali.'
     : !imported && !['data', 'bayar_daftar'].includes(r.stage) ? 'Pendaftar sudah melewati tahap pembayaran pendaftaran.'
     : null
   const canCancel = imported || ['data', 'bayar_daftar', 'ujian'].includes(r.stage)
@@ -342,7 +331,7 @@ function CatatBiayaPendaftaran({ regId }: { regId: string }) {
     <section className="card mt-6 p-5" aria-labelledby="catat-daftar">
       <h2 id="catat-daftar" className="scroll-mt-24 font-bold">Catat pembayaran pendaftaran (loket keuangan)</h2>
       <p className="text-sm text-muted">Untuk biaya pendaftaran yang dibayar langsung di loket keuangan atau di luar aplikasi. Pendaftar tidak perlu mengunggah bukti. Catatan langsung terverifikasi dan kwitansi terbit.{imported
-        ? ' Nominalnya menjadi potongan biaya registrasi saat paket ditetapkan.'
+        ? ' Biaya pendaftaran terpisah dari cicilan biaya pelatihan.'
         : ' Ujian online langsung terbuka. Bila pendaftar belum melengkapi data diri, ujian terbuka setelah data dirinya lengkap tanpa perlu membayar lagi.'}</p>
 
       {verified ? <p className="mt-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">Biaya pendaftaran sudah lunas.</p>

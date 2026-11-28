@@ -581,3 +581,28 @@ CREATE TABLE IF NOT EXISTS cash_transactions (
   created_by CHAR(36) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Data diri instruktur (nama, NIK, tanggal lahir, HP, email ada di users). Foto dan CV satu per akun.
+CREATE TABLE IF NOT EXISTS staff_profiles (
+  user_id CHAR(36) PRIMARY KEY,
+  birth_place VARCHAR(80) NULL,
+  gender ENUM('L','P') NULL,
+  marital ENUM('belum_kawin','kawin','cerai_hidup','cerai_mati') NULL,
+  religion VARCHAR(30) NULL,
+  address VARCHAR(500) NULL,
+  photo_file_id CHAR(36) NULL,
+  cv_file_id CHAR(36) NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Sertifikat pendukung instruktur, boleh lebih dari satu.
+CREATE TABLE IF NOT EXISTS staff_certificates (
+  id CHAR(36) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  file_id CHAR(36) NOT NULL,
+  label VARCHAR(160) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

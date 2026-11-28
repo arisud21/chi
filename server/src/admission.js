@@ -430,15 +430,13 @@ export async function regFeeDue(c, r, s) {
 }
 
 /**
- * Pengurang total biaya registrasi (yang dicicil): biaya pendaftaran yang sudah dibayar, potongan biaya pelatihan dan biaya tambahan,
- * serta potongan biaya pendaftaran bila biaya pendaftarannya ikut diperhitungkan (sudah dibayar, atau seluruhnya dipotong).
- * Total yang dibayar peserta selalu = biaya pelatihan + biaya tambahan - semua potongan.
+ * Pengurang total biaya pelatihan yang dicicil: hanya potongan biaya pelatihan dan biaya tambahan dari keuangan.
+ * Biaya pendaftaran berada di luar tagihan ini (dibayar terpisah) dan tidak mengurangi cicilan, begitu juga potongannya.
+ * Tagihan cicilan = biaya pelatihan + biaya tambahan - potongan keduanya.
  */
+// eslint-disable-next-line no-unused-vars
 export async function scheduleCredit(c, r, s) {
-  const [{ credit }] = await run(c, "SELECT COALESCE(SUM(amount_paid), 0) credit FROM payments WHERE registration_id = ? AND kind = 'pendaftaran' AND status = 'verified'", [r.id])
-  const d = await discountsOf(c, r.id)
-  const counted = Number(credit) > 0 || (d.reg > 0 && d.reg >= Number(s.regFee ?? REG_FEE_DEFAULT))
-  return Number(credit) + d.other + (counted ? d.reg : 0)
+  return (await discountsOf(c, r.id)).other
 }
 
 /**
@@ -599,10 +597,10 @@ export const admissionActions = {
       if (!plan) fail('Paket pembayaran tidak tersedia.')
       const [p] = await cq(c, 'SELECT price FROM programs WHERE id = ?', [r.program_id])
       const s = await getSettings(c)
-      // Total = biaya program + biaya tambahan aktif, dikurangi biaya pendaftaran yang sudah dikonfirmasi dan potongan dari keuangan.
+      // Total = biaya program + biaya tambahan aktif, dikurangi potongan dari keuangan. Biaya pendaftaran di luar tagihan ini.
       const [{ extra }] = await cq(c, 'SELECT COALESCE(SUM(amount), 0) extra FROM fee_items WHERE is_active = 1 AND ((user_id IS NULL AND (program_id IS NULL OR program_id = ?)) OR user_id = ?)', [r.program_id, r.user_id])
       const total = Math.max(0, Number(p.price) + Number(extra) - await scheduleCredit(c, r, s))
-      if (total <= 0) fail('Biaya pelatihan sudah tercukupi oleh biaya pendaftaran. Hubungi bagian keuangan.')
+      if (total <= 0) fail('Tidak ada biaya pelatihan yang perlu dicicil. Hubungi bagian keuangan.')
       const sched = buildSchedule(total, plan, s.reenrollDue || new Date().toISOString().slice(0, 10), s.pelunasanDue || s.reenrollDue || new Date().toISOString().slice(0, 10))
       await cq(c, 'DELETE FROM installments WHERE registration_id = ?', [r.id])
       for (const x of sched) await cq(c, 'INSERT INTO installments (id, registration_id, seq, amount, due_date) VALUES (?,?,?,?,?)', [uid(), r.id, x.seq, x.amount, x.due])

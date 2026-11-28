@@ -15,7 +15,7 @@ function ScoreInput({ label, value, disabled, onSave }: { label: string; value: 
 }
 
 const fmt = (n: number) => String(Math.round(n * 10) / 10)
-const BOBOT_LABEL: Record<(typeof BOBOT_KEYS)[number], string> = { absensi: 'Absensi', tugas: 'Tugas', teori: 'Teori (UTS)', praktik: 'Praktik (UAS)' }
+const BOBOT_LABEL: Record<(typeof BOBOT_KEYS)[number], string> = { absensi: 'Absensi', tugas: 'Tugas', teori: 'Nilai teori', praktik: 'Nilai praktik' }
 
 /** Empat isian bobot (persen) dengan jumlah berjalan; jumlah harus 100. `off` = komponen yang tidak ada di jenis mapel (bobot dikunci 0). */
 function BobotFields({ value, onChange, off = [] }: { value: BobotMapel; onChange: (v: BobotMapel) => void; off?: string[] }) {
@@ -122,7 +122,7 @@ export function StatusMapel({ status }: { status: string }) {
 
 /**
  * Input nilai akhir per mata pelajaran, mengikuti "Template Nilai Akhir Mata Pelajaran - CHI".
- * Instruktur mengisi tugas, teori (UTS), dan praktik (UAS) dengan skala 0-100; absensi terisi otomatis dari rekap kehadiran.
+ * Instruktur mengisi tugas, nilai teori, dan nilai praktik dengan skala 0-100; absensi terisi otomatis dari rekap kehadiran.
  * Pengiriman ke Akademik dan validasi dilakukan dari tabel yang sama lewat `actions`.
  */
 export function NilaiMapel({ batchId, instructorId }: { batchId: string; instructorId?: string }) {
@@ -166,7 +166,7 @@ export function NilaiMapel({ batchId, instructorId }: { batchId: string; instruc
       <div className="flex flex-wrap items-end justify-between gap-3 p-5 pb-3">
         <div>
           <h2 id="nm-h" className="font-bold">Input nilai per mata pelajaran</h2>
-          <p className="text-sm text-muted">Isi nilai tugas, teori (UTS), dan praktik (UAS) dengan skala 0-100. Absensi terisi otomatis dari rekap kehadiran.</p>
+          <p className="text-sm text-muted">Isi nilai tugas, nilai teori, dan nilai praktik dengan skala 0-100. Absensi terisi otomatis dari rekap kehadiran.</p>
           <BobotMapelPanel batchId={cur.batchId} subjectId={cur.subjectId} name={`${cur.batch.code} · ${subject.name}`} kind={subject.kind} w={w} own={own} />
         </div>
         <div className="flex flex-wrap items-end gap-2">
@@ -193,7 +193,7 @@ export function NilaiMapel({ batchId, instructorId }: { batchId: string; instruc
       </div>
       {gateMsg && <p role="alert" className="mx-5 mb-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">Nilai mata pelajaran ini belum bisa diisi. {gateMsg} Lengkapi pertemuan dan absensi di menu Pertemuan dan Absensi terlebih dahulu.</p>}
       {people.length === 0 ? <Empty title="Belum ada peserta aktif" body="Peserta muncul setelah ditempatkan di angkatan ini." /> : (
-        <Table bare head={['Peserta didik', `Absensi (${w.absensi}%)`, `Tugas (${w.tugas}%)`, `Teori / UTS (${w.teori}%)`, `Praktik / UAS (${w.praktik}%)`, 'Nilai angka dan huruf', 'Status']}>
+        <Table bare head={['Peserta didik', `Absensi (${w.absensi}%)`, `Tugas (${w.tugas}%)`, `Nilai teori (${w.teori}%)`, `Nilai praktik (${w.praktik}%)`, 'Nilai angka dan huruf', 'Status']}>
           {people.map(({ r, u, g }) => {
             const v = nilaiMapel(s, cur.batchId, cur.subjectId, r.id)
             const locked = g!.status !== 'draft' || sgStatus(r.id) !== 'draft' || !!gateMsg

@@ -188,6 +188,12 @@ check('unggah tanpa berkas ditolak', (await a.c.form('/api/upload/document/ktp',
 check('pas foto berupa PDF ditolak', (await upl('foto', pdf('f.pdf'))).ok !== true)
 check('berkas palsu ditolak', (await upl('kk', { bytes: Buffer.from('bukan gambar sama sekali, hanya teks biasa'), type: 'image/png', name: 'x.png' })).ok !== true)
 const docKinds = ['ktp', 'ijazah', 'foto', 'kk', 'buta_warna']
+check('unggah KTP pertama', (await upl('ktp', img('ktp0.png'))).ok === true)
+const ktp0 = (await a.c.state()).documents.find((d) => d.kind === 'ktp').fileId
+check('selama berkas belum lengkap, peserta bisa mengganti KTP', (await upl('ktp', img('ktp0b.png'))).ok === true)
+const ktp0b = (await a.c.state()).documents.filter((d) => d.kind === 'ktp')
+check('KTP tetap satu dengan berkas baru', ktp0b.length === 1 && ktp0b[0].fileId !== ktp0)
+check('berkas KTP lama dihapus dari penyimpanan', (await a.c.req(`/api/files/${ktp0}`)).status === 404)
 for (const k of docKinds) check(`unggah ${k}`, (await upl(k, k === 'foto' ? img('f.png') : k === 'ijazah' ? pdf('i.pdf') : img(`${k}.png`))).ok === true)
 let docs = (await a.c.state()).documents
 check('kelima berkas tercatat', docs.length === 5 && docKinds.every((k) => docs.some((d) => d.kind === k)))
@@ -197,7 +203,7 @@ check('peserta lain tidak bisa membuka berkas', (await b.c.req(`/api/files/${ktp
 check('Admin Pendaftaran bisa membuka berkas', (await adm.req(`/api/files/${ktp1}`)).status === 200)
 check('Keuangan tidak bisa membuka berkas', (await uang.req(`/api/files/${ktp1}`)).status === 404)
 check('admin melihat berkas peserta di state', (await adm.state()).documents.filter((d) => d.userId === reg.userId).length === 5)
-check('peserta tidak bisa mengganti berkas yang sudah diunggah', (await upl('ktp', img('ktp2.png'))).status === 403)
+check('setelah kelima berkas lengkap, peserta tidak bisa mengganti berkas sendiri', (await upl('ktp', img('ktp2.png'))).status === 403)
 check('berkas KTP tetap yang pertama', (await a.c.state()).documents.find((d) => d.kind === 'ktp').fileId === ktp1)
 check('Keuangan tidak bisa menghapus berkas', (await uang.rpc('removeDocument', reg.userId, 'ktp')).status === 403)
 check('peserta tidak bisa menghapus berkas lewat jalur admin', (await a.c.rpc('removeDocument', reg.userId, 'ktp')).status === 403)

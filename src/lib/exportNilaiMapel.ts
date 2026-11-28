@@ -52,7 +52,7 @@ function sheetXml(s: State, t: MapelTarget) {
   blank(8); blank(9)
   const heads: [string, number, string][] = [
     ['B', S.headNo, 'NO'], ['C', S.headNo, 'NIP'], ['D', S.headNo, 'NAMA PESERTA DIDIK'],
-    ['E', S.head, `ABSENSI (${w.absensi}%)`], ['F', S.head, `TUGAS (${w.tugas}%)`], ['G', S.headRot2, `UTS / TEORI (${w.teori}%)`], ['H', S.headRot2, `UAS / PRAKTIK (${w.praktik}%)`],
+    ['E', S.head, `ABSENSI (${w.absensi}%)`], ['F', S.head, `TUGAS (${w.tugas}%)`], ['G', S.headRot2, `NILAI TEORI (${w.teori}%)`], ['H', S.headRot2, `NILAI PRAKTIK (${w.praktik}%)`],
     ['I', S.head, 'NILAI AKHIR'], ['J', S.head, 'NILAI HURUF'], ['K', S.headWide, 'KETERANGAN'],
   ]
   row(10, heads.map(([c, st, text]) => cs(`${c}10`, st, text)).join(''), ' ht="78" customHeight="1"')

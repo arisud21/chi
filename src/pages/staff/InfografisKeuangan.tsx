@@ -1,6 +1,7 @@
 import { IconArrowRight, IconChartBar, IconTable } from '@tabler/icons-react'
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { Panel } from '../../components/dash'
 import { CountUp, Empty, Table } from '../../components/ui'
 import { useStore } from '../../lib/store'
 import type { Registration } from '../../lib/types'
@@ -22,6 +23,7 @@ export function InfografisKeuangan() {
   const [programId, setProgramId] = useState('')
   const [table, setTable] = useState(false)
   const [tip, setTip] = useState<string | null>(null)
+  const nav = useNavigate()
   const year = new Date().getFullYear()
 
   const d = useMemo(() => {
@@ -55,27 +57,23 @@ export function InfografisKeuangan() {
     <button key={k} type="button" aria-pressed={scope === k} onClick={() => setScope(k)}
       className={`min-h-9 rounded-full border px-3 text-sm transition ${scope === k ? 'border-brand-600 bg-brand-600 font-semibold text-white' : 'border-line bg-white hover:bg-brand-50'}`}>{label}</button>
   )
-  const tile = (label: string, n: number, note: string, strong = false) => (
-    <div className={`rounded-xl border p-4 ${strong ? 'border-brand-200 bg-brand-50' : 'border-line bg-white'}`}>
+  const tile = (label: string, n: number, note: string, to: string, strong = false) => (
+    <Link to={to} className={`card-link block rounded-xl border border-l-4 border-l-brand-600 p-4 ${strong ? 'border-brand-200 bg-brand-50' : 'border-line bg-white'}`}>
       <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
       <p className="mt-1 text-4xl font-bold text-brand-700"><CountUp to={n} /></p>
       <p className="mt-1 text-xs text-muted">{note}</p>
-    </div>
+    </Link>
   )
+  // Baris program/angkatan menuju rekap pembayaran peserta didik; data pendaftaran ada di menu Pendaftar.
+  const rowTo = '/admin/peserta-didik'
 
   return (
-    <section className="card p-5 lg:col-span-2" aria-labelledby="info-keu">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h2 id="info-keu" className="font-bold">Pendaftaran dan registrasi ulang</h2>
-          <p className="text-sm text-muted">{scopeNote}</p>
-        </div>
-        <button type="button" className="btn-ghost !min-h-9 shrink-0" onClick={() => setTable(!table)} aria-pressed={table}>
-          {table ? <><IconChartBar size={16} />Lihat grafik</> : <><IconTable size={16} />Lihat tabel</>}
-        </button>
-      </div>
+    <Panel title="Pendaftaran dan registrasi ulang" sub={scopeNote} className="xl:col-span-3" action={
+      <button type="button" className="btn-ghost !min-h-8 shrink-0 !px-2.5 text-xs" onClick={() => setTable(!table)} aria-pressed={table}>
+        {table ? <><IconChartBar size={15} />Lihat grafik</> : <><IconTable size={15} />Lihat tabel</>}
+      </button>}>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Filter infografis">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter infografis">
         {chip('tahun', `Tahun berjalan (${year})`)}
         {chip('angkatan', 'Angkatan dibuka')}
         {chip('semua', 'Semua')}
@@ -86,12 +84,12 @@ export function InfografisKeuangan() {
       </div>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        {tile('Sudah bayar pendaftaran', all.paid, `${pct(all.paid, all.total)}% dari ${all.total} pendaftar`)}
-        {tile('Lulus, belum registrasi ulang', all.lulusBelum, 'Menunggu pembayaran registrasi ulang')}
-        {tile('Sudah registrasi ulang', all.reenrolled, lulus > 0 ? `${pct(all.reenrolled, lulus)}% dari ${lulus} yang lulus` : 'Belum ada yang lulus', true)}
+        {tile('Sudah bayar pendaftaran', all.paid, `${pct(all.paid, all.total)}% dari ${all.total} pendaftar`, '/admin/pendaftar?bayar=verified')}
+        {tile('Lulus, belum registrasi ulang', all.lulusBelum, 'Menunggu pembayaran registrasi ulang', '/admin/pembayaran')}
+        {tile('Sudah registrasi ulang', all.reenrolled, lulus > 0 ? `${pct(all.reenrolled, lulus)}% dari ${lulus} yang lulus` : 'Belum ada yang lulus', rowTo, true)}
       </div>
       {all.waiting > 0 && (
-        <Link to="/admin/pendaftar" className="mt-3 flex min-h-11 items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 text-sm text-amber-900 transition hover:bg-amber-100">
+        <Link to="/admin/pendaftar?bayar=submitted" className="mt-3 flex min-h-11 items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 text-sm text-amber-900 transition hover:bg-amber-100">
           <span><b>{all.waiting}</b> bukti pembayaran pendaftaran menunggu verifikasi</span><IconArrowRight size={16} className="shrink-0" />
         </Link>
       )}
@@ -101,7 +99,7 @@ export function InfografisKeuangan() {
         <Empty title="Belum ada data" body="Belum ada pendaftar yang membayar pendaftaran atau registrasi ulang pada cakupan ini." />
       ) : table ? (
         <Table bare head={[scope === 'angkatan' ? 'Angkatan' : 'Program', 'Sudah bayar pendaftaran', 'Sudah registrasi ulang']}>
-          {rows.map((r) => <tr key={r.key}><td className="font-semibold">{r.label}{r.meta && <span className="block text-xs font-normal text-muted">{r.meta}</span>}</td><td className="tabular-nums">{r.paid}</td><td className="tabular-nums">{r.reenrolled}</td></tr>)}
+          {rows.map((r) => <tr key={r.key} className="cursor-pointer" onClick={() => nav(rowTo)}><td className="font-semibold text-brand-700">{r.label}{r.meta && <span className="block text-xs font-normal text-muted">{r.meta}</span>}</td><td className="tabular-nums">{r.paid}</td><td className="tabular-nums">{r.reenrolled}</td></tr>)}
         </Table>
       ) : (
         <>
@@ -111,9 +109,10 @@ export function InfografisKeuangan() {
           </ul>
           <ul className="space-y-4">
             {rows.map((r, i) => (
-              <li key={r.key} className="relative" tabIndex={0}
+              <li key={r.key} className="relative">
+                <Link to={rowTo} className="block rounded-lg px-2 py-1 hover:bg-brand-50"
                 onMouseEnter={() => setTip(r.key)} onMouseLeave={() => setTip(null)} onFocus={() => setTip(r.key)} onBlur={() => setTip(null)}
-                aria-label={`${r.label}: ${r.paid} sudah bayar pendaftaran, ${r.reenrolled} sudah registrasi ulang`}>
+                aria-label={`${r.label}: ${r.paid} sudah bayar pendaftaran, ${r.reenrolled} sudah registrasi ulang. Buka rekap pembayaran.`}>
                 <p className="mb-1 text-sm font-semibold">{r.label}{r.meta && <span className="ml-2 text-xs font-normal text-muted">{r.meta}</span>}</p>
                 {([['paid', r.paid, 'bg-brand-500'], ['reenrolled', r.reenrolled, 'bg-brand-700']] as const).map(([k, n, cls]) => (
                   <div key={k} className="flex items-center gap-2 py-0.5">
@@ -121,6 +120,7 @@ export function InfografisKeuangan() {
                     <span className="text-xs font-semibold tabular-nums">{n}</span>
                   </div>
                 ))}
+                </Link>
                 {tip === r.key && (
                   <div role="tooltip" className="pointer-events-none absolute right-0 top-0 z-10 w-56 rounded-lg border border-line bg-white p-3 text-xs shadow-lg">
                     <p className="font-semibold">{r.label}</p>
@@ -133,6 +133,6 @@ export function InfografisKeuangan() {
           </ul>
         </>
       )}
-    </section>
+    </Panel>
   )
 }

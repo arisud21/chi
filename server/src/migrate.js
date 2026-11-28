@@ -14,6 +14,23 @@ export async function ensureCurricula() {
   }
   await q(`UPDATE batches b SET b.curriculum_id = (SELECT c.id FROM curricula c WHERE c.program_id = b.program_id ORDER BY c.is_active DESC, c.created_at DESC LIMIT 1)
     WHERE b.curriculum_id IS NULL`)
+  // Kelas gabungan tidak lagi dibuat di bank mata pelajaran (diatur di Jadwal pembelajaran). Mata pelajaran gabungan lama yang belum
+  // dipakai jadwal atau pertemuan disalin ke setiap kurikulum (kecuali yang sudah punya nama sama), lalu yang lama dihapus.
+  // Yang sudah dipakai dibiarkan agar jadwal dan nilainya tetap utuh.
+  const legacy = await q(`SELECT * FROM subjects s WHERE s.program_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM batch_subjects bs WHERE bs.subject_id = s.id) AND NOT EXISTS (SELECT 1 FROM class_sessions cs WHERE cs.subject_id = s.id)
+    AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.subject_id = s.id) AND NOT EXISTS (SELECT 1 FROM subject_grades g WHERE g.subject_id = s.id)`)
+  const curricula = await q('SELECT id, program_id FROM curricula')
+  if (!curricula.length) return // belum ada kurikulum tujuan: jangan hapus apa pun
+  for (const sj of legacy) {
+    for (const cur of curricula) {
+      const [dup] = await q('SELECT id FROM subjects WHERE curriculum_id = ? AND LOWER(name) = LOWER(?)', [cur.id, sj.name])
+      if (dup) continue
+      await q('INSERT INTO subjects (id, program_id, curriculum_id, code, name, kind, hours, hours_per_meeting, meetings, description, is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        [uid(), cur.program_id, cur.id, sj.code, sj.name, sj.kind, sj.hours, sj.hours_per_meeting, sj.meetings, sj.description, sj.is_active])
+    }
+    await q('DELETE FROM subjects WHERE id = ?', [sj.id])
+  }
 }
 
 const COLUMNS = [
@@ -77,6 +94,28 @@ const COLUMNS = [
 
 // Tabel baru untuk database yang sudah berjalan (sama dengan schema.sql).
 const TABLES = [
+  // Data diri dan sertifikat instruktur (sama dengan schema.sql).
+  `CREATE TABLE IF NOT EXISTS staff_profiles (
+      user_id CHAR(36) PRIMARY KEY,
+      birth_place VARCHAR(80) NULL,
+      gender ENUM('L','P') NULL,
+      marital ENUM('belum_kawin','kawin','cerai_hidup','cerai_mati') NULL,
+      religion VARCHAR(30) NULL,
+      address VARCHAR(500) NULL,
+      photo_file_id CHAR(36) NULL,
+      cv_file_id CHAR(36) NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS staff_certificates (
+      id CHAR(36) PRIMARY KEY,
+      user_id CHAR(36) NOT NULL,
+      file_id CHAR(36) NOT NULL,
+      label VARCHAR(160) NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX (user_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   // Potongan biaya per pendaftar (sama dengan schema.sql).
   `CREATE TABLE IF NOT EXISTS registration_discounts (
     id CHAR(36) PRIMARY KEY,

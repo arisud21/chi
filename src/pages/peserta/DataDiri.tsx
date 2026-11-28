@@ -1,8 +1,9 @@
-import { IconCircleCheck, IconLock } from '@tabler/icons-react'
+import { IconCircleCheck, IconLock, IconUser } from '@tabler/icons-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { BiodataPdf } from '../../components/BiodataPdf'
 import { Field, PageHeader, ask, dateID, useAct } from '../../components/ui'
-import { changeEmail, getDistricts, getProvinces, getRegencies, saveProfile, useStore, type Area, type Result } from '../../lib/store'
+import { changeEmail, getDistricts, getProvinces, getRegencies, photoOf, saveProfile, useStore, type Area, type Result } from '../../lib/store'
 import type { Profile } from '../../lib/types'
 import { useMe } from './Peserta'
 
@@ -133,6 +134,30 @@ export function ProfileForm({ user, profile, lockIdentity, canEditEmail = false,
   )
 }
 
+/** Pas foto 3x4 dari berkas registrasi ulang, dalam bingkai 3:4 berukuran tetap. */
+function FotoPeserta() {
+  const { me, regs } = useMe()
+  const photo = useStore((s) => photoOf(s, me.id))
+  const active = regs.some((r) => r.stage === 'aktif')
+  return (
+    <section className="card mb-5 flex flex-wrap items-center gap-5 p-5" aria-labelledby="foto-peserta">
+      <div className="grid aspect-[3/4] w-28 shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-canvas sm:w-32">
+        {photo
+          ? <a href={`/api/files/${photo}`} target="_blank" rel="noreferrer" className="size-full" aria-label="Buka pas foto ukuran penuh"><img src={`/api/files/${photo}`} alt={`Pas foto ${me.name}`} className="size-full object-cover" /></a>
+          : <IconUser size={40} className="text-muted" aria-hidden />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <h2 id="foto-peserta" className="font-bold">Pas foto</h2>
+        <p className="mt-0.5 text-lg font-semibold">{me.name}</p>
+        <p className="mt-1 text-sm text-muted">{photo
+          ? 'Pas foto 3x4 yang Anda unggah. Foto ini juga tampil di samping nama Anda di bagian atas.'
+          : active ? 'Belum ada pas foto. Unggah pas foto 3x4 di bagian berkas pada beranda.' : 'Pas foto 3x4 diunggah setelah registrasi ulang dikonfirmasi.'}</p>
+        {!photo && active && <Link to="/app" className="btn-ghost mt-3 !min-h-9">Unggah pas foto</Link>}
+      </div>
+    </section>
+  )
+}
+
 const L = (v?: string) => (v === 'L' ? 'Laki-laki' : v === 'P' ? 'Perempuan' : '-')
 
 /** Tampilan baca saja setelah registrasi ulang. Perubahan hanya lewat admin. */
@@ -187,13 +212,14 @@ export function DataDiri() {
       </>
     )
   }
-  if (locked) return <><PageHeader title="Data diri" />{me.emailChangeable && <EmailAkun key={me.email} email={me.email} />}<LockedProfile /></>
+  if (locked) return <><PageHeader title="Data diri" action={<BiodataPdf userId={me.id} />} /><FotoPeserta />{me.emailChangeable && <EmailAkun key={me.email} email={me.email} />}<LockedProfile /></>
 
   return (
     <>
-      <PageHeader title="Data diri" sub={active
+      <PageHeader title="Data diri" action={me.profileDone ? <BiodataPdf userId={me.id} /> : undefined} sub={active
         ? 'Akun peserta didik Anda sudah aktif. Lengkapi data diri berikut, lalu unggah berkas agar ruang belajar terbuka. Periksa dengan teliti: setelah disimpan, perubahan hanya lewat admin.'
         : me.profileDone ? 'Data diri Anda sudah lengkap. Anda masih bisa memperbaruinya sampai registrasi ulang dikonfirmasi.' : 'Setelah lengkap, Anda diminta membayar biaya pendaftaran. Data dipakai untuk administrasi dan surat kelulusan.'} />
+      <FotoPeserta />
       {me.profileDone && <p className="mb-4 flex items-center gap-2 rounded-lg bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"><IconCircleCheck size={18} />Data diri lengkap. <Link to="/app" className="underline">Lihat tahapan</Link></p>}
       {me.emailChangeable && <EmailAkun key={me.email} email={me.email} />}
       <ProfileForm user={me} profile={profile} lockIdentity submitLabel={active ? 'Simpan data diri' : me.profileDone ? 'Perbarui data diri' : 'Simpan dan lanjut ke pembayaran'}

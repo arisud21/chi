@@ -12,6 +12,7 @@ import multer from 'multer'
 import sharp from 'sharp'
 import { actions, assertOwnSession, expireOverdue, registerForProgram } from './actions.js'
 import { beritaAcaraData, beritaAcaraDocx, beritaAcaraPdf } from './beritaAcara.js'
+import { biodataData, biodataPdf } from './biodata.js'
 import { logbookData, logbookDocx } from './logbookMagang.js'
 import { migrate } from './migrate.js'
 import { addClient } from './realtime.js'
@@ -21,6 +22,7 @@ import { processQueue } from './mailer.js'
 import { transcriptPdf } from './pdf.js'
 import { transkripData, transkripDocx, transkripPdf } from './transkripAkhir.js'
 import { buildState } from './state.js'
+import { STAFF_PROFILE_ROLES, saveStaffFile } from './staffProfile.js'
 import * as wilayah from './wilayah.js'
 
 const SECRET = process.env.JWT_SECRET
@@ -422,13 +424,31 @@ app.post('/api/upload/document/:kind', upload.single('file'), wrap(async (req, r
   const [r] = await q("SELECT id FROM registrations WHERE user_id = ? AND stage = 'aktif' AND status IN ('active','completed') LIMIT 1", [u.id])
   if (!r) fail('Berkas diunggah setelah registrasi ulang Anda dikonfirmasi.', 403)
   if (!req.file) fail('Pilih berkas yang akan diunggah.')
-  const [old] = await q('SELECT id FROM registration_documents WHERE user_id = ? AND kind = ?', [u.id, req.params.kind])
-  if (old) fail('Berkas ini sudah diunggah. Hubungi admin pendaftaran bila perlu diganti.', 403)
+  // Selama kelima berkas belum lengkap, peserta boleh mengganti berkasnya sendiri. Setelah lengkap, program terkunci dan penggantian lewat admin.
+  if (await hasAllDocs(u.id)) fail('Kelima berkas sudah lengkap. Hubungi admin pendaftaran bila perlu diganti.', 403)
   const fileId = await saveUpload(req.file, { kind: 'document', ownerId: u.id, allowed })
+  let oldStored = null
   await tx(async (c) => {
-    await cq(c, 'INSERT INTO registration_documents (id, user_id, kind, file_id) VALUES (?,?,?,?)', [uid(), u.id, req.params.kind, fileId])
-    await audit(c, u.id, 'berkas.unggah', 'registration_documents', req.params.kind)
+    const [old] = await cq(c, 'SELECT id, file_id FROM registration_documents WHERE user_id = ? AND kind = ? FOR UPDATE', [u.id, req.params.kind])
+    if (old) {
+      const [f] = await cq(c, 'SELECT stored_name FROM files WHERE id = ?', [old.file_id])
+      oldStored = f?.stored_name ?? null
+      await cq(c, 'UPDATE registration_documents SET file_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?', [fileId, old.id])
+      await cq(c, 'DELETE FROM files WHERE id = ?', [old.file_id])
+    } else {
+      await cq(c, 'INSERT INTO registration_documents (id, user_id, kind, file_id) VALUES (?,?,?,?)', [uid(), u.id, req.params.kind, fileId])
+    }
+    await audit(c, u.id, old ? 'berkas.ganti' : 'berkas.unggah', 'registration_documents', req.params.kind)
   })
+  if (oldStored) await fs.promises.unlink(path.join(UPLOAD_DIR, oldStored)).catch(() => {}) // berkas fisik lama dihapus setelah commit
+  res.json({ ok: true })
+}))
+
+/** Data diri instruktur: pas foto, CV (mengganti yang lama), atau satu sertifikat pendukung (field label = nama sertifikat). */
+app.post('/api/upload/staff/:which', upload.single('file'), wrap(async (req, res) => {
+  const u = needRole(req, STAFF_PROFILE_ROLES)
+  if (!req.file) fail('Pilih berkas yang akan diunggah.')
+  await saveStaffFile(u, req.params.which, req.file, req.body?.label)
   res.json({ ok: true })
 }))
 
@@ -460,6 +480,8 @@ async function canReadFile(user, f) {
   if (f.kind === 'document') return f.owner_id === user.id || ['super_admin', 'admin_pendaftaran', 'akademik'].includes(user.role)
   if (f.kind === 'profile') return f.owner_id === user.id || ['super_admin', 'admin_pendaftaran', 'akademik'].includes(user.role)
   if (f.kind === 'submission') return f.owner_id === user.id || ['super_admin', 'akademik', 'instruktur'].includes(user.role)
+  // Berkas data diri instruktur: pemiliknya dan Super Admin (menu Akun pengelola).
+  if (['staff_photo', 'staff_cv', 'staff_cert'].includes(f.kind)) return f.owner_id === user.id || user.role === 'super_admin'
   if (f.kind === 'signature') return ['super_admin', 'admin_pendaftaran'].includes(user.role)
   if (f.kind === 'material') {
     if (staff) return true
@@ -495,6 +517,21 @@ app.get('/api/surat/:regId/pdf', wrap(async (req, res) => {
   if (u.role === 'peserta' ? r.user_id !== u.id : u.role === 'instruktur') fail('Tidak berhak.', 403)
   res.type('application/pdf').set('Content-Disposition', 'inline; filename="surat-kelulusan.pdf"')
   await renderLetter(res, req.params.regId)
+}))
+/**
+ * Biodata (template data diri) dalam PDF. Peserta didik: dirinya sendiri, Super Admin, Admin Pendaftaran, dan Akademik.
+ * Instruktur/staf: dirinya sendiri dan Super Admin. Instruktur mendapat riwayat mengajar dari jadwal pembelajaran.
+ */
+app.get('/api/biodata/:userId/pdf', wrap(async (req, res) => {
+  const u = needUser(req)
+  const d = await biodataData(req.params.userId)
+  if (!d) fail('Data tidak ditemukan.', 404)
+  const self = d.u.id === u.id
+  const allowed = self || u.role === 'super_admin' || (d.kind === 'peserta' && ['admin_pendaftaran', 'akademik'].includes(u.role))
+  if (!allowed) fail('Anda tidak berhak mengunduh biodata ini.', 403)
+  const slug = d.u.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'biodata'
+  res.type('application/pdf').set('Content-Disposition', `${req.query.dl ? 'attachment' : 'inline'}; filename="biodata-${slug}.pdf"`)
+  biodataPdf(res, d, self ? '' : u.name)
 }))
 app.get('/api/transcripts/:regId/pdf', wrap(async (req, res) => {
   const u = needUser(req)

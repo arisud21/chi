@@ -1,20 +1,17 @@
-﻿import { IconArrowBackUp, IconArrowRight, IconCheck, IconFileSpreadsheet, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
+﻿import { IconArrowBackUp, IconCheck, IconFileSpreadsheet, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { PengumumanForm } from './Akademik'
 import { NilaiMapel } from './NilaiMapel'
-import { PantauInstruktur } from './PantauInstruktur'
-import { DashboardAkademik } from './DashboardAkademik'
-import { InfografisKeuangan } from './InfografisKeuangan'
 import { exportNilaiXlsx } from '../../lib/exportNilai'
-import { ask, Badge, CountUp, KIND_LABEL, Table, Empty, Field, Modal, MoneyInput, PageHeader, Reveal, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
+import { ask, Badge, KIND_LABEL, Table, Empty, Field, Modal, MoneyInput, PageHeader, Reveal, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
 import {
   archiveProgram, restoreProgram, batchCurriculumId, currentCurriculum, deleteBatch, deleteProgram, finalScore, getState, newId, recommendPass, rejectPayment,
   saveBatch, saveGrade, saveProgram, saveSettings, saveUser, deleteUser, seatsTaken, submitGrade, teachesBatch, useStore, verifyPayment,
-  setUserPassword, unattendedSessions,
+  setUserPassword,
 } from '../../lib/store'
 import { PesertaActions, randomPassword } from './PesertaTools'
 import { HapusPesertaModal } from './PesertaAdmin'
+import { DataDiriInstrukturTable } from './DataDiriInstrukturTable'
 import { ROLE_LABEL, type Batch, type Program, type Role, type User } from '../../lib/types'
 
 /** Input nilai dengan buffer lokal; disimpan ke server saat kehilangan fokus. */
@@ -23,143 +20,6 @@ function GradeInput({ label, value, disabled, onSave }: { label: string; value: 
   useEffect(() => setV(String(value)), [value])
   return <input aria-label={label} className="input !min-h-9 !w-20 !px-2" type="number" min={0} max={100} disabled={disabled} value={v}
     onChange={(e) => setV(e.target.value)} onBlur={() => { const n = Math.max(0, Math.min(100, +v || 0)); if (n !== value) onSave(n) }} />
-}
-
-/** Dashboard instruktur: rekap kehadiran tiap peserta didik di angkatan yang diajar. */
-function RekapKehadiran({ instructorId }: { instructorId: string }) {
-  const s = useStore((x) => x)
-  const mine = s.batches.filter((b) => teachesBatch(s, instructorId, b.id) && b.status !== 'draft' && b.status !== 'cancelled')
-  if (mine.length === 0) return <section className="card lg:col-span-2"><Empty title="Belum ada angkatan" body="Rekap kehadiran muncul setelah Anda ditetapkan sebagai instruktur sebuah angkatan." /></section>
-  return (
-    <div className="space-y-5 lg:col-span-2">
-      {mine.map((b) => {
-        const p = s.programs.find((x) => x.id === b.programId)
-        const people = s.registrations.filter((r) => r.batchId === b.id && (r.status === 'active' || r.status === 'completed'))
-        const regIds = new Set(people.map((r) => r.id))
-        const sessions = s.sessions.filter((x) => x.batchId === b.id)
-        const rec = s.attendances.filter((a) => regIds.has(a.registrationId) && sessions.some((x) => x.id === a.sessionId))
-        const held = new Set(rec.map((a) => a.sessionId)).size // pertemuan yang sudah dicatat absensinya
-        const min = p?.rules.minAttendance ?? 0
-        return (
-          <section key={b.id} className="card overflow-hidden" aria-labelledby={`rk-${b.id}`}>
-            <div className="flex flex-wrap items-center justify-between gap-2 p-5 pb-3">
-              <div><h2 id={`rk-${b.id}`} className="font-bold">Rekap kehadiran {b.code}</h2><p className="text-sm text-muted">{p?.title} · {held} dari {sessions.length} pertemuan sudah diabsen · minimal hadir {min}%</p></div>
-              <Link to="/admin/absensi" className="btn-ghost !min-h-9">Isi absensi<IconArrowRight size={16} /></Link>
-            </div>
-            {people.length === 0 ? <Empty title="Belum ada peserta" body="Peserta muncul setelah registrasi ulangnya dikonfirmasi dan ditempatkan di angkatan ini." /> : (
-              <Table bare head={['Peserta didik', 'NIP', 'Hadir', 'Izin', 'Sakit', 'Alpa', 'Kehadiran']}>
-                {people.map((r) => {
-                  const mineRec = rec.filter((a) => a.registrationId === r.id)
-                  const n = (st: string) => mineRec.filter((a) => a.status === st).length
-                  const pct = held > 0 ? Math.round((n('hadir') / held) * 100) : null
-                  const low = pct !== null && pct < min
-                  return (
-                    <tr key={r.id}>
-                      <td className="font-semibold">{s.users.find((u) => u.id === r.userId)?.name}</td>
-                      <td className="font-mono text-xs">{r.nip ?? '-'}</td>
-                      <td className="tabular-nums">{n('hadir')}</td><td className="tabular-nums">{n('izin')}</td><td className="tabular-nums">{n('sakit')}</td>
-                      <td className={`tabular-nums ${n('alpa') ? 'font-semibold text-red-700' : ''}`}>{n('alpa')}</td>
-                      <td>
-                        {pct === null ? <span className="text-muted">Belum ada absensi</span> : (
-                          <div className="flex items-center gap-2" role="img" aria-label={`Kehadiran ${pct} persen${low ? ', di bawah minimal' : ''}`}>
-                            <div className="h-2 w-24 overflow-hidden rounded-full bg-canvas"><div className={`h-full rounded-full ${low ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${pct}%` }} /></div>
-                            <span className={`text-sm font-semibold tabular-nums ${low ? 'text-red-700' : ''}`}>{pct}%</span>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </Table>
-            )}
-          </section>
-        )
-      })}
-    </div>
-  )
-}
-
-/* ---------------- Dashboard ---------------- */
-export function Dashboard() {
-  const s = useStore((x) => x)
-  const me = s.users.find((u) => u.id === s.sessionUserId)!
-  const queue = s.payments.filter((p) => p.status === 'submitted').length
-  // Nilai per mata pelajaran: instruktur menyetor, Akademik memvalidasi.
-  const toFill = s.batchSubjects.filter((bs) => bs.instructorId === me.id && !s.subjectGrades.some((x) => x.subjectId === bs.subjectId && x.status !== 'draft' && s.registrations.some((r) => r.id === x.registrationId && r.batchId === bs.batchId))).length
-  const toValidate = new Set(s.subjectGrades.filter((x) => x.status === 'submitted').map((x) => `${s.registrations.find((r) => r.id === x.registrationId)?.batchId}|${x.subjectId}`)).size
-  const awaitingDecision = s.registrations.filter((r) => r.stage === 'menunggu_hasil').length
-  const awaitingReenroll = s.registrations.filter((r) => r.stage === 'registrasi_ulang' && r.status === 'pending_payment').length
-  const openBatches = s.batches.filter((b) => b.status === 'open')
-  // Tahapan penerimaan, lalu hasil akhirnya. Peserta aktif dihitung dari tahap aktif.
-  const statuses = ['data', 'bayar_daftar', 'ujian', 'menunggu_hasil', 'registrasi_ulang', 'aktif', 'tidak_lulus'] as const
-  const counts = statuses.map((k) => [k, s.registrations.filter((r) => r.stage === k && r.status !== 'expired' && (k === 'tidak_lulus' || r.status !== 'cancelled')).length] as const)
-  const max = Math.max(1, ...counts.map((c) => c[1]))
-  const revenue = s.payments.filter((p) => p.status === 'verified').reduce((a, p) => a + p.amountPaid, 0)
-
-  const R = (...a: Role[]) => a
-  const todo: { role: Role[]; to: string; n: number; label: string }[] = [
-    { role: R('super_admin'), to: '/admin/pembayaran', n: queue, label: 'bukti pembayaran menunggu verifikasi' },
-    { role: R('admin_keuangan'), to: '/admin/pendaftar', n: s.payments.filter((p) => p.status === 'submitted' && p.kind === 'pendaftaran').length, label: 'bukti pembayaran pendaftaran menunggu verifikasi' },
-    { role: R('admin_keuangan'), to: '/admin/pembayaran', n: s.payments.filter((p) => p.status === 'submitted' && p.kind !== 'pendaftaran').length, label: 'bukti registrasi ulang dan cicilan menunggu verifikasi' },
-    { role: R('super_admin', 'admin_pendaftaran'), to: '/admin/ujian', n: awaitingDecision, label: 'pendaftar selesai ujian dan menunggu keputusan lulus' },
-    { role: R('super_admin', 'admin_pendaftaran'), to: '/admin/pendaftar', n: awaitingReenroll, label: 'pendaftar lulus yang belum registrasi ulang' },
-    { role: R('instruktur'), to: '/admin/absensi', n: unattendedSessions(s, me.id).length, label: 'pertemuan belum diisi absensinya (pertemuan baru tidak bisa ditambah sebelum diisi)' },
-    { role: R('instruktur'), to: '/admin/nilai', n: toFill, label: 'mata pelajaran yang nilainya belum disetor ke Akademik' },
-    { role: R('super_admin', 'akademik'), to: '/admin/validasi-nilai', n: toValidate, label: 'mata pelajaran menunggu validasi nilai' },  ].filter((t) => t.role.includes(me.role))
-
-  return (
-    <>
-      <PageHeader title="Dashboard" sub={`Masuk sebagai ${ROLE_LABEL[me.role]}.`} />
-      <div className="grid gap-5 lg:grid-cols-3">
-        <section className={`card p-5 ${me.role === 'akademik' ? 'lg:col-span-3' : 'lg:col-span-1'}`}>
-          <h2 className="font-bold">Perlu tindakan</h2>
-          {todo.length === 0 && <p className="mt-3 text-sm text-muted">Tidak ada tugas untuk role ini. Dashboard role Admin Pendaftaran fokus pada angkatan di sebelah kanan.</p>}
-          <ul className="mt-3 space-y-2">
-            {todo.map((t, i) => (
-              <li key={i}><Link to={t.to} className="flex min-h-14 items-center justify-between gap-3 rounded-xl bg-canvas p-3 transition hover:bg-brand-50">
-                <span className="text-sm"><b className={`mr-1 text-xl ${t.n ? 'text-brand-700' : 'text-muted'}`}><CountUp to={t.n} /></b>{t.label}</span>
-                <IconArrowRight size={18} className="shrink-0" />
-              </Link></li>
-            ))}
-          </ul>
-        </section>
-        {me.role === 'instruktur' ? <RekapKehadiran instructorId={me.id} /> : me.role === 'akademik' ? <DashboardAkademik /> : <>
-        {me.role === 'admin_keuangan' ? <InfografisKeuangan /> : (
-        <section className="card p-5 lg:col-span-2">
-          <h2 className="font-bold">Pendaftar menurut tahap</h2>
-          <p className="text-sm text-muted">Jumlah registrasi di tiap tahap penerimaan saat ini.</p>
-          <div className="mt-5 space-y-3">
-            {counts.map(([k, n], i) => (
-              <div key={k} className="grid grid-cols-[9rem_1fr_2rem] items-center gap-3 text-sm">
-                <Badge status={k} />
-                <div className="h-3 overflow-hidden rounded-full bg-canvas"><div className="h-full origin-left animate-bar rounded-full bg-brand-500" style={{ width: `${(n / max) * 100}%`, animationDelay: `${i * 80}ms` }} /></div>
-                <span className="text-right font-bold">{n}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-        )}
-        <section className="card overflow-hidden lg:col-span-2">
-          <div className="p-5 pb-3"><h2 className="font-bold">Angkatan dibuka</h2></div>
-          {openBatches.length === 0 ? <Empty title="Tidak ada angkatan dibuka" body="Buat atau buka angkatan di menu Program dan angkatan." /> : (
-            <ul>{openBatches.map((b) => {
-              const p = s.programs.find((x) => x.id === b.programId)!; const t = seatsTaken(s, b.id)
-              return <li key={b.id} className="flex items-center justify-between gap-3 border-t border-line px-5 py-3 text-sm"><span><b>{b.code}</b> <span className="text-muted">{p.title}</span></span><span className="font-semibold">{t}/{b.quota}</span></li>
-            })}</ul>
-          )}
-        </section>
-        </>}
-        {['super_admin', 'admin_keuangan', 'admin_pendaftaran'].includes(me.role) && (
-        <section className="card p-5">
-          <h2 className="font-bold">Pemasukan terverifikasi</h2>
-          <p className="mt-3 font-display text-3xl font-bold text-brand-700">{rupiah(revenue)}</p>
-          <p className="text-sm text-muted">Dari {s.payments.filter((p) => p.status === 'verified').length} pembayaran.</p>
-        </section>
-        )}
-        {me.role === 'super_admin' && <PantauInstruktur />}
-      </div>
-    </>
-  )
 }
 
 /* ---------------- Program dan angkatan ---------------- */
@@ -410,6 +270,7 @@ export function Pengguna({ kind }: { kind: 'pengelola' | 'siswa' }) {
   const [pwFor, setPwFor] = useState<User | null>(null)
   const [newPw, setNewPw] = useState('')
   const [force, setForce] = useState(true)
+  const [staffView, setStaffView] = useState<'akun' | 'datadiri'>('akun')
   const programs = s.programs.filter((p) => !p.archived)
   const needle = find.trim().toLowerCase()
   const match = (x: User) => !needle || x.name.toLowerCase().includes(needle) || x.email.toLowerCase().includes(needle)
@@ -440,9 +301,16 @@ export function Pengguna({ kind }: { kind: 'pengelola' | 'siswa' }) {
           })}
         </div>
         <input className="input !w-64" type="search" placeholder="Cari nama atau email" aria-label="Cari pengguna" value={find} onChange={(e) => setFind(e.target.value)} />
+        {tab === 'staf' && (
+          <div className="inline-flex rounded-lg border border-line bg-white p-1 sm:ml-auto" role="tablist" aria-label="Tampilan akun pengelola">
+            {([['akun', 'Daftar akun'], ['datadiri', 'Data diri instruktur']] as const).map(([k, l]) => (
+              <button key={k} role="tab" aria-selected={staffView === k} className={`min-h-9 rounded-md px-3 text-sm font-semibold transition ${staffView === k ? 'bg-brand-600 text-white' : 'hover:bg-brand-50'}`} onClick={() => setStaffView(k)}>{l}</button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {tab === 'staf' ? (
+      {tab === 'staf' && staffView === 'datadiri' ? <DataDiriInstrukturTable users={staff} /> : tab === 'staf' ? (
         <Table head={['Nama', 'Email', 'Role', 'Status', '']}>
           {staff.map((x) => <tr key={x.id}><td className="font-semibold">{x.name}</td><td>{x.email}</td>
             <td>{ROLE_LABEL[x.role]}{x.role === 'instruktur' && <span className="block text-xs text-muted">{instructorProgramLabel(s.programs, x.instructorPrograms) || 'Program belum dipilih'}</span>}</td>

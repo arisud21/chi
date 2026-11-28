@@ -56,7 +56,7 @@ export function ArsipNilai() {
             }}><IconFileSpreadsheet size={18} />Ekspor Excel</button>
           </div>
         </div>
-        <Table bare head={['Peserta didik', 'Absensi', 'Tugas', 'Teori / UTS', 'Praktik / UAS', 'Nilai angka', 'Huruf', 'Status']}>
+        <Table bare head={['Peserta didik', 'Absensi', 'Tugas', 'Nilai teori', 'Nilai praktik', 'Nilai angka', 'Huruf', 'Status']}>
           {people.map(({ r, u }) => {
             const v = nilaiMapel(s, cur.batchId, cur.subjectId, r.id)
             return (

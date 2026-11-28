@@ -2,7 +2,7 @@ import { IconAlertCircle, IconCheck, IconDownload, IconUpload } from '@tabler/ic
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Field, Modal, MoneyInput, PageHeader, Table, dateID, rupiah, useAct } from '../../components/ui'
-import { itemsFor, regFeeFor, shortfallOf, summarize } from '../../lib/billing'
+import { discountsFor, itemsFor, regFeeFor, shortfallOf, summarize } from '../../lib/billing'
 import { WaButton } from '../../lib/wa'
 import { DOC_KINDS, DOC_LABEL, choosePlan, resumeRegistration, submitProof, uploadDocument, useStore } from '../../lib/store'
 import type { DocKind, Installment, PayKind, PaymentPlan, Registration, Stage } from '../../lib/types'
@@ -85,10 +85,11 @@ function Reenroll({ reg }: { reg: Registration }) {
   const s = useStore((x) => x)
   const act = useAct()
   const prog = s.programs.find((p) => p.id === reg.programId)
-  const credit = s.payments.filter((p) => p.registrationId === reg.id && p.kind === 'pendaftaran' && p.status === 'verified').reduce((t, p) => t + p.amountPaid, 0)
+  // Tagihan cicilan = biaya pelatihan + biaya tambahan - potongan dari keuangan. Biaya pendaftaran sudah dibayar terpisah, tidak mengurangi.
   const fullPrice = prog?.price ?? reg.priceSnapshot
   const extras = s.feeItems.filter((x) => x.userId ? x.userId === reg.userId : (!x.programId || x.programId === reg.programId))
-  const total = Math.max(0, fullPrice + extras.reduce((t, x) => t + x.amount, 0) - credit)
+  const cuts = discountsFor(s, reg.id).filter((d) => d.target !== 'pendaftaran')
+  const total = Math.max(0, fullPrice + extras.reduce((t, x) => t + x.amount, 0) - cuts.reduce((t, d) => t + d.amount, 0))
   const plans = s.plans.filter((p) => !p.programId || p.programId === reg.programId)
   const insts = s.installments.filter((i) => i.registrationId === reg.id).sort((a, b) => a.seq - b.seq)
   const first = insts[0]
@@ -99,8 +100,8 @@ function Reenroll({ reg }: { reg: Registration }) {
       <dl className="rounded-xl border border-line bg-canvas p-4 text-sm">
         <div className="flex justify-between gap-3 py-0.5"><dt>Biaya pelatihan</dt><dd className="tabular-nums">{rupiah(fullPrice)}</dd></div>
         {extras.map((x) => <div key={x.id} className="flex justify-between gap-3 py-0.5"><dt>{x.name}</dt><dd className="tabular-nums">{rupiah(x.amount)}</dd></div>)}
-        <div className="flex justify-between gap-3 py-0.5"><dt>Dikurangi biaya pendaftaran</dt><dd className="tabular-nums">- {rupiah(credit)}</dd></div>
-        <div className="mt-1 flex justify-between gap-3 border-t border-line pt-2 font-bold"><dt>Sisa yang dibayar</dt><dd className="tabular-nums text-brand-700">{rupiah(total)}</dd></div>
+        {cuts.map((d) => <div key={d.id} className="flex justify-between gap-3 py-0.5 text-sky-800"><dt>Potongan {d.label.toLowerCase()}</dt><dd className="tabular-nums">- {rupiah(d.amount)}</dd></div>)}
+        <div className="mt-1 flex justify-between gap-3 border-t border-line pt-2 font-bold"><dt>Total yang dibayar (dicicil)</dt><dd className="tabular-nums text-brand-700">{rupiah(total)}</dd></div>
       </dl>
       <p className="text-sm">Pilih paket pembayaran. Anda dapat mengganti paket selama pembayaran pertama belum diunggah.</p>
       <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Paket pembayaran">
@@ -145,41 +146,73 @@ const DOC_HINT: Record<DocKind, string> = {
   kk: 'JPG, PNG, atau PDF.', buta_warna: 'Dari klinik atau puskesmas. JPG, PNG, atau PDF.',
 }
 
-/** Lima berkas yang diunggah setelah registrasi ulang dikonfirmasi. Yang sudah terunggah tidak bisa diganti sendiri. */
+const sizeLabel = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
+
+/**
+ * Lima berkas yang diunggah setelah registrasi ulang dikonfirmasi.
+ * Berkas yang dipilih dipratinjau dulu sebelum dikirim. Selama kelima berkas belum lengkap,
+ * berkas yang sudah terunggah boleh diganti. Setelah lengkap, program terkunci dan penggantian lewat admin.
+ */
 function Berkas({ programTitle }: { programTitle: string }) {
   const docs = useStore((x) => x.documents)
   const act = useAct()
   const inputs = useRef<Partial<Record<DocKind, HTMLInputElement | null>>>({})
-  const [busy, setBusy] = useState<DocKind | null>(null)
-  const [last, setLast] = useState<{ kind: DocKind; file: File } | null>(null)
-  const pick = async (kind: DocKind, file: File | undefined) => {
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState<{ kind: DocKind; file: File; url: string } | null>(null)
+  const clearInput = (kind: DocKind) => { if (inputs.current[kind]) inputs.current[kind]!.value = '' }
+  const closeDraft = () => {
+    if (busy) return
+    if (draft) { URL.revokeObjectURL(draft.url); clearInput(draft.kind) }
+    setDraft(null)
+  }
+  const pick = (kind: DocKind, file: File | undefined) => {
+    clearInput(kind) // agar memilih berkas yang sama lagi tetap memicu onChange
     if (!file) return
     const okTypes = kind === 'foto' ? ['image/jpeg', 'image/png'] : ['image/jpeg', 'image/png', 'application/pdf']
     if (!okTypes.includes(file.type)) return act(Promise.resolve({ ok: false, error: kind === 'foto' ? 'Pas foto harus JPG atau PNG.' : 'Format harus JPG, PNG, atau PDF.' }), '')
     if (file.size > 2 * 1024 * 1024) return act(Promise.resolve({ ok: false, error: 'Ukuran berkas maksimal 2 MB.' }), '')
-    // Berkas terakhir mengunci program pilihan, jadi minta konfirmasi dulu.
-    if (docs.length === DOC_KINDS.length - 1 && !docs.some((d) => d.kind === kind)) { setLast({ kind, file }); return }
-    await send(kind, file)
+    if (draft) URL.revokeObjectURL(draft.url)
+    setDraft({ kind, file, url: URL.createObjectURL(file) })
   }
-  const send = async (kind: DocKind, file: File) => {
-    setBusy(kind)
-    await act(uploadDocument(kind, file), `${DOC_LABEL[kind]} terunggah.`)
-    setBusy(null)
-    if (inputs.current[kind]) inputs.current[kind]!.value = ''
+  const send = async () => {
+    if (!draft) return
+    const replacing = docs.some((d) => d.kind === draft.kind)
+    setBusy(true)
+    const ok = await act(uploadDocument(draft.kind, draft.file), replacing ? `${DOC_LABEL[draft.kind]} diganti.` : `${DOC_LABEL[draft.kind]} terunggah.`)
+    setBusy(false)
+    if (ok) { URL.revokeObjectURL(draft.url); setDraft(null) } // gagal: pratinjau tetap terbuka agar bisa dicoba lagi
   }
-  const cancelLast = () => { if (last && inputs.current[last.kind]) inputs.current[last.kind]!.value = ''; setLast(null) }
+  const replacing = !!draft && docs.some((d) => d.kind === draft.kind)
+  // Berkas terakhir yang belum ada akan melengkapi kelima berkas dan mengunci program pilihan.
+  const isLast = !!draft && !replacing && docs.length === DOC_KINDS.length - 1
+  const isPdf = draft?.file.type === 'application/pdf'
   return (
     <>
-    <Modal open={!!last} title="Ini berkas terakhir" onClose={cancelLast}>
-      <div className="space-y-3 text-sm">
-        <p>Setelah <b>{last ? DOC_LABEL[last.kind] : ''}</b> terunggah, kelima berkas lengkap dan <b>program pilihan Anda tidak dapat diubah lagi</b>.</p>
-        <p className="rounded-lg bg-canvas p-3">Program Anda: <b>{programTitle}</b></p>
-        <p className="text-muted">Bila ingin mengganti program, batalkan dulu dan hubungi admin pendaftaran.</p>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn-primary flex-1" onClick={() => { const l = last!; setLast(null); send(l.kind, l.file) }}>Program sudah benar, unggah</button>
-          <button className="btn-ghost" onClick={cancelLast}>Batal</button>
+    <Modal open={!!draft} title={draft ? `Pratinjau ${DOC_LABEL[draft.kind]}` : ''} onClose={closeDraft}>
+      {draft && (
+        <div className="space-y-3 text-sm">
+          <div className="overflow-hidden rounded-xl border border-line bg-canvas">
+            {isPdf
+              ? <iframe src={draft.url} title={`Pratinjau ${DOC_LABEL[draft.kind]}`} className="h-[60vh] w-full bg-white" />
+              : <img src={draft.url} alt={`Pratinjau ${DOC_LABEL[draft.kind]}`} className="mx-auto max-h-[60vh] w-auto object-contain" />}
+          </div>
+          <p className="truncate text-muted" title={draft.file.name}>{draft.file.name} · {sizeLabel(draft.file.size)}</p>
+          <p>Periksa apakah berkas sudah benar, terbaca jelas, dan tidak terpotong. {replacing ? 'Berkas lama akan diganti dengan berkas ini.' : ''}</p>
+          {isLast && (
+            <div className="space-y-2 rounded-lg bg-amber-50 p-3 text-amber-900">
+              <p>Ini berkas terakhir. Setelah dikirim, kelima berkas lengkap dan <b>program pilihan serta berkas tidak dapat diubah lagi</b> kecuali lewat admin pendaftaran.</p>
+              <p>Program Anda: <b>{programTitle}</b></p>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-primary flex-1" disabled={busy} onClick={send}>
+              <IconUpload size={18} />{busy ? 'Mengirim…' : isLast ? 'Program sudah benar, kirim' : replacing ? 'Ganti berkas' : 'Kirim berkas'}
+            </button>
+            <button type="button" className="btn-ghost" disabled={busy} onClick={() => inputs.current[draft.kind]?.click()}>Pilih berkas lain</button>
+            <button type="button" className="btn-ghost" disabled={busy} onClick={closeDraft}>Batal</button>
+          </div>
         </div>
-      </div>
+      )}
     </Modal>
     <ul className="divide-y divide-line">
       {DOC_KINDS.map((k) => {
@@ -187,15 +220,13 @@ function Berkas({ programTitle }: { programTitle: string }) {
         return (
           <li key={k} className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="min-w-0">
-              <p className="font-semibold">{DOC_LABEL[k]}</p>
+              <p className="flex items-center gap-1.5 font-semibold">{DOC_LABEL[k]}{d && <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700"><IconCheck size={14} />Terunggah</span>}</p>
               <p className="text-xs text-muted">{d ? <a className="font-semibold text-brand-600 underline" href={`/api/files/${d.fileId}`} target="_blank" rel="noreferrer">Lihat berkas</a> : DOC_HINT[k]}</p>
             </div>
+            <input ref={(el) => { inputs.current[k] = el }} type="file" className="sr-only" tabIndex={-1} aria-label={`Pilih berkas ${DOC_LABEL[k]}`} accept={k === 'foto' ? '.jpg,.jpeg,.png' : '.jpg,.jpeg,.png,.pdf'} onChange={(e) => pick(k, e.target.files?.[0])} />
             {d
-              ? <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-700"><IconCheck size={18} />Terunggah</span>
-              : <>
-                <input ref={(el) => { inputs.current[k] = el }} type="file" className="sr-only" tabIndex={-1} aria-label={`Pilih berkas ${DOC_LABEL[k]}`} accept={k === 'foto' ? '.jpg,.jpeg,.png' : '.jpg,.jpeg,.png,.pdf'} onChange={(e) => pick(k, e.target.files?.[0])} />
-                <button type="button" className="btn-primary" disabled={busy === k} onClick={() => inputs.current[k]?.click()}><IconUpload size={18} />{busy === k ? 'Mengunggah…' : 'Unggah'}</button>
-              </>}
+              ? <button type="button" className="btn-ghost" onClick={() => inputs.current[k]?.click()}><IconUpload size={18} />Ganti</button>
+              : <button type="button" className="btn-primary" onClick={() => inputs.current[k]?.click()}><IconUpload size={18} />Unggah</button>}
           </li>
         )
       })}

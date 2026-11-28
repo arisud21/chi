@@ -1,7 +1,7 @@
 import { IconPencil, IconPlus, IconTrash, IconUpload } from '@tabler/icons-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Badge, Empty, Field, Modal, PageHeader, Table, dateID, useAct } from '../../components/ui'
+import { Badge, Empty, Field, Modal, PageHeader, Table, dateID, useAct, useQueryParam } from '../../components/ui'
 import { batchCurriculumId, currentCurriculum, deleteJadwal, newId, saveBatch, saveJadwal, setBatchCurriculum, subjectFitsBatch, useStore, type JadwalInput } from '../../lib/store'
 import type { Batch, Subject, User } from '../../lib/types'
 import { SUBJECT_KIND } from './ImporMapel'
@@ -9,27 +9,34 @@ import { ImportJadwalModal } from './JadwalImport'
 
 const DAYS = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min']
 
-/** Instruktur yang cocok untuk mata pelajaran: salah satu program yang ia ampu sama, atau kelas gabungan untuk mapel gabungan. Yang belum memilih program tetap ditampilkan. */
-const fits = (u: User, x?: Subject) => !x || !u.instructorPrograms?.length || u.instructorPrograms.includes(x.programId === '' ? 'gabungan' : x.programId)
+/**
+ * Instruktur yang cocok untuk mata pelajaran: salah satu program yang ia ampu sama, atau (untuk kelas gabungan) instruktur kelas gabungan
+ * atau program salah satu angkatan yang ikut. Yang belum memilih program tetap ditampilkan.
+ */
+const fits = (u: User, x: Subject | undefined, gabungan: boolean, programIds: string[]) => !x || !u.instructorPrograms?.length
+  || u.instructorPrograms.includes(x.programId === '' ? 'gabungan' : x.programId)
+  || (gabungan && (u.instructorPrograms.includes('gabungan') || programIds.some((p) => u.instructorPrograms!.includes(p))))
 
 /** Akademik menyusun jadwal pembelajaran tiap angkatan satu per satu: satu jadwal untuk satu mata pelajaran dan instruktur pengampunya. */
 export function Jadwal() {
   const s = useStore((x) => x)
   const act = useAct()
   const programs = s.programs.filter((p) => !p.archived)
-  const [programId, setProgramId] = useState(programs[0]?.id ?? '')
+  const qProgram = useQueryParam('program')
+  const [programId, setProgramId] = useState(programs.some((p) => p.id === qProgram) ? qProgram : programs[0]?.id ?? '')
   const batches = s.batches.filter((b) => b.programId === programId && b.status !== 'cancelled' && b.status !== 'finished')
   const active = s.batches.filter((b) => b.status !== 'cancelled' && b.status !== 'finished') // semua program, untuk kelas gabungan
-  const [pickedBatch, setBatchId] = useState('')
+  const [pickedBatch, setBatchId] = useState(useQueryParam('batch'))
   const batch = batches.find((b) => b.id === pickedBatch) ?? batches[0]
   const [f, setF] = useState<JadwalInput | null>(null)
+  const [gab, setGab] = useState(false) // jadwal ini kelas gabungan dengan angkatan lain (boleh lintas pelatihan)
   const [nb, setNb] = useState<Batch | null>(null)
   const [del, setDel] = useState<{ subjectId: string; name: string; group: string[] } | null>(null)
   const [imp, setImp] = useState(false)
   const instructors = s.users.filter((u) => u.role === 'instruktur' && u.active)
   const name = (id: string) => s.users.find((u) => u.id === id)?.name
   const code = (id: string) => s.batches.find((b) => b.id === id)?.code ?? ''
-  // Pilihan mata pelajaran: kurikulum angkatan terpilih (atau kurikulum terbaru bila belum ada angkatan) ditambah kelas gabungan.
+  // Pilihan mata pelajaran: kurikulum angkatan terpilih (atau kurikulum terbaru bila belum ada angkatan).
   const curId = batch ? batchCurriculumId(s, batch) : currentCurriculum(s, programId)?.id ?? ''
   const bank = s.subjects.filter((x) => x.active && subjectFitsBatch(s, x, { programId, curriculumId: curId })).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
   const curricula = s.curricula.filter((c) => c.programId === programId)
@@ -43,20 +50,26 @@ export function Jadwal() {
     .sort((a, b) => DAYS.indexOf(a.days.split(',')[0]) - DAYS.indexOf(b.days.split(',')[0]) || a.startTime.localeCompare(b.startTime)) : []
   const free = bank.filter((x) => !rows.some((r) => r.subjectId === x.id)) // mapel yang belum punya jadwal di angkatan ini
   const fSubject = f ? s.subjects.find((x) => x.id === f.subjectId) : undefined
-  const shared = fSubject?.programId === ''
-  const options = f ? instructors.filter((u) => fits(u, fSubject) || u.id === f.instructorId) : []
+  const groupPrograms = f ? [...new Set((f.batchIds ?? []).map((id) => s.batches.find((b) => b.id === id)?.programId ?? ''))] : []
+  const options = f ? instructors.filter((u) => fits(u, fSubject, gab, groupPrograms) || u.id === f.instructorId) : []
+  /** Mata pelajaran yang dipakai angkatan lain bila ikut kelas gabungan: yang bernama sama di kurikulumnya (sama dengan server). */
+  const subjectIn = (batchId: string) => {
+    const b = s.batches.find((x) => x.id === batchId)
+    const cid = b ? batchCurriculumId(s, b) : ''
+    return s.subjects.find((x) => x.active && cid && x.curriculumId === cid && x.name.trim().toLowerCase() === (fSubject?.name ?? '').trim().toLowerCase())
+  }
   /** Angkatan lain yang sudah punya jadwal sendiri untuk mapel ini (bukan bagian grup ini): tidak bisa digabung dari sini. */
   const ownElsewhere = (batchId: string) => {
     if (!f || batchId === f.batchId) return false
-    const own = s.batchSubjects.find((x) => x.batchId === batchId && x.subjectId === f.subjectId)
+    const sid = subjectIn(batchId)?.id ?? f.subjectId
+    const own = s.batchSubjects.find((x) => x.batchId === batchId && x.subjectId === sid)
     const mine = s.batchSubjects.find((x) => x.batchId === f.batchId && x.subjectId === f.subjectId)?.groupId
     return !!own && (!own.groupId || own.groupId !== mine)
   }
   const pickSubject = (id: string, base: JadwalInput) => {
     const x = bank.find((y) => y.id === id)
-    // Kelas gabungan: secara bawaan berlaku untuk semua angkatan aktif di seluruh program (yang belum punya jadwal sendiri).
-    const all = x?.programId === '' ? active.filter((b) => b.id === base.batchId || !s.batchSubjects.some((y) => y.batchId === b.id && y.subjectId === id)).map((b) => b.id) : [base.batchId]
-    setF({ ...base, subjectId: id, instructorId: '', sessions: x ? x.meetings ?? Math.max(1, Math.ceil(x.hours / 4)) : base.sessions, batchIds: all })
+    setGab(false) // kelas gabungan dipilih sendiri lewat kotak centang
+    setF({ ...base, subjectId: id, instructorId: '', sessions: x ? x.meetings ?? Math.max(1, Math.ceil(x.hours / 4)) : base.sessions, batchIds: [base.batchId] })
   }
   const add = () => {
     if (!batch) return
@@ -65,7 +78,7 @@ export function Jadwal() {
 
   return (
     <>
-      <PageHeader title="Jadwal pembelajaran" sub="Tambahkan jadwal satu per satu atau impor dari Excel. Mata pelajaran kelas gabungan dijadwalkan sekali untuk angkatan di seluruh program."
+      <PageHeader title="Jadwal pembelajaran" sub="Tambahkan jadwal satu per satu atau impor dari Excel. Kelas gabungan: centang angkatan lain (boleh dari pelatihan lain) saat menambah atau mengubah jadwal."
         action={<div className="flex flex-wrap gap-2">
           <button className="btn-ghost" onClick={() => setImp(true)}><IconUpload size={18} />Impor jadwal</button>
           {prog && <button className="btn-ghost" onClick={() => setNb({ id: newId('b'), programId, code: '', startDate: '', endDate: '', quota: 20, status: 'draft', location: '', scheduleDays: '', startTime: '', endTime: '', plannedSessions: 0, angkatan: null, curriculumId: currentCurriculum(s, programId)?.id ?? '' })}><IconPlus size={18} />Angkatan baru</button>}
@@ -107,7 +120,7 @@ export function Jadwal() {
                 return (
                   <tr key={r.subjectId}>
                     <td><p className="font-semibold">{r.subject?.name}</p>
-                      <p className="text-xs text-muted">{r.subject?.programId === '' ? 'Kelas gabungan · ' : ''}{r.subject ? SUBJECT_KIND[r.subject.kind] : ''}</p>
+                      <p className="text-xs text-muted">{group.length > 1 || r.subject?.programId === '' ? 'Kelas gabungan · ' : ''}{r.subject ? SUBJECT_KIND[r.subject.kind] : ''}</p>
                       {group.length > 1 && <p className="text-xs text-brass-600">Digabung dengan {group.filter((id) => id !== batch.id).map(code).join(', ')}</p>}
                     </td>
                     <td>{name(r.instructorId) ?? <span className="text-amber-800">Belum ditunjuk</span>}</td>
@@ -115,7 +128,7 @@ export function Jadwal() {
                     <td>{r.room || '-'}</td>
                     <td className="tabular-nums">{r.used}/{r.sessions}</td>
                     <td className="whitespace-nowrap text-right">
-                      <button className="btn-ghost !min-h-9" aria-label={`Ubah jadwal ${r.subject?.name}`} onClick={() => setF({ batchId: batch.id, subjectId: r.subjectId, editing: true, sessions: r.sessions, instructorId: r.instructorId, days: r.days ? r.days.split(',') : [], startTime: r.startTime || '08:00', endTime: r.endTime || '10:00', room: r.room, batchIds: group })}><IconPencil size={16} />Ubah</button>
+                      <button className="btn-ghost !min-h-9" aria-label={`Ubah jadwal ${r.subject?.name}`} onClick={() => { setGab(group.length > 1); setF({ batchId: batch.id, subjectId: r.subjectId, editing: true, sessions: r.sessions, instructorId: r.instructorId, days: r.days ? r.days.split(',') : [], startTime: r.startTime || '08:00', endTime: r.endTime || '10:00', room: r.room, batchIds: group }) }}><IconPencil size={16} />Ubah</button>
                       <button className="btn-ghost !min-h-9 text-red-700" aria-label={`Hapus jadwal ${r.subject?.name}`} disabled={r.used > 0} title={r.used > 0 ? 'Sudah ada pertemuan, jadwal tidak bisa dihapus' : undefined}
                         onClick={() => group.length > 1 ? setDel({ subjectId: r.subjectId, name: r.subject?.name ?? '', group }) : act(deleteJadwal(batch.id, r.subjectId), 'Jadwal dihapus.')}><IconTrash size={16} /></button>
                     </td>
@@ -128,15 +141,15 @@ export function Jadwal() {
       )}
 
       <Modal open={!!f} title={f?.editing ? `Ubah jadwal ${fSubject?.name ?? ''}` : `Tambah jadwal ${batch?.code ?? ''}`} onClose={() => setF(null)}>
-        {f && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(saveJadwal(f), f.editing ? 'Jadwal diperbarui.' : shared && (f.batchIds?.length ?? 0) > 1 ? `Jadwal kelas gabungan ditambahkan ke ${f.batchIds!.length} angkatan.` : 'Jadwal ditambahkan.', () => setF(null)) }}>
+        {f && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(saveJadwal(f), f.editing ? 'Jadwal diperbarui.' : gab && (f.batchIds?.length ?? 0) > 1 ? `Jadwal kelas gabungan ditambahkan ke ${f.batchIds!.length} angkatan.` : 'Jadwal ditambahkan.', () => setF(null)) }}>
           {!f.editing && (
             <Field label="Mata pelajaran" hint="Hanya mata pelajaran yang belum punya jadwal di angkatan ini.">
               <select className="input" required value={f.subjectId} onChange={(e) => pickSubject(e.target.value, f)}>
-                {free.map((x) => <option key={x.id} value={x.id}>{x.name}{x.programId === '' ? ' (kelas gabungan)' : ''}</option>)}
+                {free.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
               </select>
             </Field>
           )}
-          <Field label="Instruktur pengampu" hint={fSubject ? `Instruktur dengan program ${shared ? 'kelas gabungan' : prog?.title}.` : undefined}>
+          <Field label="Instruktur pengampu" hint={fSubject ? `Instruktur dengan program ${gab ? 'salah satu angkatan yang digabung atau kelas gabungan' : prog?.title}.` : undefined}>
             <select className="input" required value={f.instructorId} onChange={(e) => setF({ ...f, instructorId: e.target.value })}>
               <option value="">Pilih instruktur</option>{options.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
@@ -156,10 +169,12 @@ export function Jadwal() {
             <Field label="Ruang / kelas"><input className="input" placeholder="mis. Aula" value={f.room} onChange={(e) => setF({ ...f, room: e.target.value })} /></Field>
             <Field label="Jumlah pertemuan"><input className="input" type="number" min={1} max={50} required readOnly={bank.find((y) => y.id === f.subjectId)?.meetings != null} title={bank.find((y) => y.id === f.subjectId)?.meetings != null ? 'Mengikuti jumlah pertemuan di bank mata pelajaran' : undefined} value={bank.find((y) => y.id === f.subjectId)?.meetings ?? f.sessions} onChange={(e) => setF({ ...f, sessions: Math.max(1, Math.min(50, +e.target.value || 1)) })} /></Field>
           </div>
-          {shared && (
+          <label className="flex min-h-11 items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5 size-4 accent-brand-600" checked={gab} onChange={(e) => { setGab(e.target.checked); if (!e.target.checked) setF({ ...f, batchIds: [f.batchId] }) }} />
+            <span><b>Jadikan kelas gabungan</b><span className="block text-xs text-muted">Angkatan lain, juga dari pelatihan lain, belajar bersama di kelas ini dengan instruktur, hari, jam, dan ruang yang sama.</span></span></label>
+          {gab && (
             <fieldset className="rounded-lg border border-line p-3">
-              <legend className="label px-1">Berlaku untuk angkatan (seluruh program)</legend>
-              <p className="mb-2 text-xs text-muted">Kelas gabungan: jadwal dan instruktur yang sama muncul di setiap angkatan yang dicentang.</p>
+              <legend className="label px-1">Angkatan yang digabung</legend>
+              <p className="mb-2 text-xs text-muted">Tiap angkatan memakai mata pelajaran bernama sama dari kurikulumnya sendiri. Bila kurikulumnya tidak memuat mata pelajaran ini, angkatan itu memakai mata pelajaran {prog?.title}.</p>
               <div className="max-h-56 space-y-3 overflow-auto">
                 {programs.map((p) => {
                   const list = active.filter((b) => b.programId === p.id)

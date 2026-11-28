@@ -7,6 +7,9 @@ import { ImporMapel, SUBJECT_KIND } from './ImporMapel'
 
 type CurForm = Curriculum & { copyFrom?: string }
 
+/** Jam total = jam per pertemuan x jumlah pertemuan, bila keduanya terisi. Server memakai rumus yang sama. */
+const withTotal = (x: Subject): Subject => (x.hoursPerMeeting && x.meetings ? { ...x, hours: x.hoursPerMeeting * x.meetings } : x)
+
 /**
  * Bank mata pelajaran (Akademik): pelatihan punya satu atau beberapa kurikulum, dan tiap kurikulum berisi mata pelajarannya.
  * Angkatan memakai satu kurikulum, jadi mata pelajaran tiap angkatan bisa berbeda. Jadwal pembelajaran memilih dari sini.
@@ -22,13 +25,13 @@ export function MataPelajaran() {
   const [cf, setCf] = useState<CurForm | null>(null)
   const [delCur, setDelCur] = useState<Curriculum | null>(null)
   const [impor, setImpor] = useState(false)
-  const gabungan = programId === 'gabungan' // tampilan khusus kelas gabungan, berlaku untuk semua pelatihan
   const prog = programs.find((p) => p.id === programId)
   const curricula = s.curricula.filter((c) => c.programId === programId).sort((a, b) => Number(b.active) - Number(a.active) || b.createdAt.localeCompare(a.createdAt))
   const cur = curricula.find((c) => c.id === pickedCur) ?? currentCurriculum(s, programId) ?? curricula[0]
   const latest = currentCurriculum(s, programId)
   const usedBy = (cid: string) => s.batches.filter((b) => (b.curriculumId || latest?.id) === cid && b.programId === programId)
-  const list = s.subjects.filter((x) => (gabungan ? x.programId === '' : x.programId === '' || (x.programId === programId && x.curriculumId === cur?.id)))
+  // Kelas gabungan tidak dibuat di bank: diatur di Jadwal pembelajaran dari mata pelajaran kurikulum masing-masing.
+  const list = s.subjects.filter((x) => x.programId === programId && x.curriculumId === cur?.id)
     .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
   const totalHours = list.filter((x) => x.active).reduce((a, x) => a + x.hours, 0)
   const usage = (id: string) => s.batchSubjects.filter((b) => b.subjectId === id).length
@@ -38,11 +41,11 @@ export function MataPelajaran() {
   return (
     <>
       <PageHeader title="Bank mata pelajaran" sub="Pilih pelatihan dan kurikulumnya, lalu kelola mata pelajarannya. Tiap angkatan memakai satu kurikulum, jadi mata pelajaran antarangkatan bisa berbeda."
-        action={<div className="flex flex-wrap gap-2"><button className="btn-ghost" disabled={programs.length === 0} onClick={() => setImpor(true)}><IconFileImport size={18} />Impor dari spreadsheet</button><button className="btn-primary" disabled={!(prog && cur) && !gabungan} onClick={() => setF({ id: newIdLike('sj'), programId: gabungan ? '' : programId, curriculumId: gabungan ? '' : cur?.id ?? '', code: '', name: '', kind: 'teori', hours: 8, hoursPerMeeting: null, meetings: null, description: '', active: true })}><IconPlus size={18} />Mata pelajaran</button></div>} />
+        action={<div className="flex flex-wrap gap-2"><button className="btn-ghost" disabled={programs.length === 0} onClick={() => setImpor(true)}><IconFileImport size={18} />Impor dari spreadsheet</button><button className="btn-primary" disabled={!(prog && cur)} onClick={() => setF({ id: newIdLike('sj'), programId, curriculumId: cur?.id ?? '', code: '', name: '', kind: 'teori', hours: 0, hoursPerMeeting: null, meetings: null, description: '', active: true })}><IconPlus size={18} />Mata pelajaran</button></div>} />
 
       <div className="mb-4 flex flex-wrap items-end gap-4">
         <label className="block min-w-64"><span className="label">Pelatihan</span>
-          <select className="input" value={programId} onChange={(e) => { setProgramId(e.target.value); setPickedCur('') }}>{programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}<option value="gabungan">Kelas gabungan (semua pelatihan)</option></select>
+          <select className="input" value={programId} onChange={(e) => { setProgramId(e.target.value); setPickedCur('') }}>{programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select>
         </label>
         {prog && curricula.length > 0 && <label className="block min-w-64"><span className="label">Kurikulum</span>
           <select className="input" value={cur?.id ?? ''} onChange={(e) => setPickedCur(e.target.value)}>{curricula.map((c) => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (nonaktif)'}</option>)}</select>
@@ -52,14 +55,14 @@ export function MataPelajaran() {
           {cur && <button className="btn-ghost" aria-label={`Ubah kurikulum ${cur.name}`} onClick={() => setCf({ ...cur })}><IconPencil size={18} />Ubah</button>}
           {cur && <button className="btn-ghost text-red-700" aria-label={`Hapus kurikulum ${cur.name}`} onClick={() => setDelCur(cur)}><IconTrash size={18} /></button>}
         </div>}
-        {gabungan && <p className="pb-2.5 text-sm text-muted">Kelas gabungan cukup dibuat sekali dan otomatis tersedia di jadwal semua pelatihan dan kurikulum.</p>}
+        {prog && <p className="pb-2.5 text-sm text-muted">Kelas gabungan antarpelatihan diatur di menu Jadwal pembelajaran.</p>}
       </div>
 
       {prog && cur && (
         <div className="mb-4 rounded-xl bg-canvas px-4 py-3 text-sm">
           <p className="flex flex-wrap items-center gap-2"><b>{cur.name}</b>{cur.id === latest?.id && <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[11px] font-semibold text-brand-700">Bawaan angkatan baru</span>}{!cur.active && <Badge status="draft" />}</p>
           {cur.description && <p className="text-muted">{cur.description}</p>}
-          <p className="mt-1 text-muted">Dipakai angkatan: {usedBy(cur.id).length ? <b className="text-ink">{usedBy(cur.id).map((b) => b.code).join(', ')}</b> : 'belum ada'} · Durasi program <b className="text-ink">{prog.durationHours} jam</b> · jam mata pelajaran aktif (termasuk kelas gabungan) <b className={totalHours === prog.durationHours ? 'text-emerald-700' : 'text-amber-700'}>{totalHours} jam</b></p>
+          <p className="mt-1 text-muted">Dipakai angkatan: {usedBy(cur.id).length ? <b className="text-ink">{usedBy(cur.id).map((b) => b.code).join(', ')}</b> : 'belum ada'} · Durasi program <b className="text-ink">{prog.durationHours} jam</b> · jam mata pelajaran aktif <b className={totalHours === prog.durationHours ? 'text-emerald-700' : 'text-amber-700'}>{totalHours} jam</b></p>
         </div>
       )}
 
@@ -69,10 +72,10 @@ export function MataPelajaran() {
          {list.map((x) => (
            <tr key={x.id}>
              <td className="font-mono text-xs">{x.code || '-'}</td>
-             <td><p className="font-semibold">{x.name}</p>{x.description && <p className="text-xs text-muted">{x.description}</p>}{x.programId === '' && !gabungan && <span className="mt-0.5 inline-block rounded bg-brand-50 px-1.5 py-0.5 text-[11px] font-semibold text-brand-700">Kelas gabungan</span>}</td>
+             <td><p className="font-semibold">{x.name}</p>{x.description && <p className="text-xs text-muted">{x.description}</p>}</td>
              <td>{SUBJECT_KIND[x.kind]}</td><td className="tabular-nums">{x.hoursPerMeeting ?? '-'}</td><td className="tabular-nums">{x.meetings ?? '-'}</td><td className="font-semibold tabular-nums">{x.hours}</td><td>{usage(x.id) ? `${usage(x.id)} angkatan` : '-'}</td>
              <td><Badge status={x.active ? 'open' : 'draft'} /></td>
-             <td className="whitespace-nowrap text-right"><button className="btn-ghost !min-h-9" onClick={() => setF(x)}>Ubah</button> <button className="btn-ghost !min-h-9 text-red-700" onClick={() => setDel(x)}>Hapus</button></td>
+             <td className="whitespace-nowrap text-right"><button className="btn-ghost !min-h-9" onClick={() => setF(withTotal(x))}>Ubah</button> <button className="btn-ghost !min-h-9 text-red-700" onClick={() => setDel(x)}>Hapus</button></td>
            </tr>
          ))}
         </Table>
@@ -80,14 +83,16 @@ export function MataPelajaran() {
 
       <Modal open={!!f} title={f && s.subjects.some((x) => x.id === f.id) ? 'Ubah mata pelajaran' : 'Mata pelajaran baru'} onClose={() => setF(null)}>
         {f && <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); act(saveSubject(f), 'Mata pelajaran disimpan.', () => setF(null)) }}>
-          <p className="rounded-lg bg-canvas p-3 text-sm">{f.programId === '' ? <>Pelatihan: <b>Semua pelatihan (kelas gabungan)</b></> : <>Pelatihan: <b>{programs.find((p) => p.id === f.programId)?.title}</b> · Kurikulum: <b>{s.curricula.find((c) => c.id === f.curriculumId)?.name}</b></>}</p>
+          <p className="rounded-lg bg-canvas p-3 text-sm">Pelatihan: <b>{programs.find((p) => p.id === f.programId)?.title}</b> · Kurikulum: <b>{s.curricula.find((c) => c.id === f.curriculumId)?.name}</b></p>
           <Field label="Nama mata pelajaran"><input className="input" required maxLength={120} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Jenis"><select className="input" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as Subject['kind'] })}><option value="teori">Teori</option><option value="teori_praktik">Teori dan praktik</option>{f.kind === 'praktik' && <option value="praktik">Praktik (data lama)</option>}</select></Field>
             <Field label="Kode" hint="Maksimal 12 karakter."><input className="input font-mono uppercase" maxLength={12} value={f.code ?? ''} onChange={(e) => setF({ ...f, code: e.target.value })} /></Field>
-            <Field label="Jam per pertemuan"><input className="input" type="number" min={1} max={24} value={f.hoursPerMeeting ?? ''} onChange={(e) => setF({ ...f, hoursPerMeeting: e.target.value === '' ? null : +e.target.value })} /></Field>
-            <Field label="Jumlah pertemuan"><input className="input" type="number" min={1} max={60} value={f.meetings ?? ''} onChange={(e) => setF({ ...f, meetings: e.target.value === '' ? null : +e.target.value })} /></Field>
-            <Field label="Jumlah jam per program"><input className="input" type="number" min={1} max={500} required value={f.hours} onChange={(e) => setF({ ...f, hours: +e.target.value })} /></Field>
+            <Field label="Jam per pertemuan"><input className="input" type="number" min={1} max={24} step={1} value={f.hoursPerMeeting ?? ''} onChange={(e) => setF(withTotal({ ...f, hoursPerMeeting: e.target.value === '' ? null : +e.target.value }))} /></Field>
+            <Field label="Jumlah pertemuan"><input className="input" type="number" min={1} step={1} value={f.meetings ?? ''} onChange={(e) => setF(withTotal({ ...f, meetings: e.target.value === '' ? null : +e.target.value }))} /></Field>
+            {f.hoursPerMeeting && f.meetings
+              ? <Field label="Jumlah jam per program" hint={`Otomatis: ${f.hoursPerMeeting} jam x ${f.meetings} pertemuan.`}><input className="input bg-canvas font-semibold tabular-nums" type="number" readOnly value={f.hours} /></Field>
+              : <Field label="Jumlah jam per program" hint="Terhitung otomatis bila jam per pertemuan dan jumlah pertemuan diisi."><input className="input" type="number" min={1} step={1} required value={f.hours || ''} onChange={(e) => setF({ ...f, hours: +e.target.value })} /></Field>}
           </div>
           <Field label="Keterangan (opsional)"><input className="input" maxLength={255} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
           <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-brand-600" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />Aktif (muncul di pilihan jadwal)</label>

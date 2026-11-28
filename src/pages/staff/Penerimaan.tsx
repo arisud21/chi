@@ -1,6 +1,6 @@
 import { IconCopy, IconDownload, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
-import { ask, Empty, Field, Modal, MoneyInput, PageHeader, Table, dateID, dateTimeID, rupiah, useAct, useToast } from '../../components/ui'
+import { ask, Empty, Field, Modal, MoneyInput, PageHeader, Table, dateID, dateTimeID, rupiah, useAct, useQueryParam, useToast } from '../../components/ui'
 import {
   createExamToken, decideAdmission, deleteBank, deleteExam, deleteFeeItem, deletePlan, deleteQuestion, saveBank, saveExamConfig, saveFeeItem, saveFees, savePlan, revokeExamToken, saveQuestions, setProgramPrice, useStore,
 } from '../../lib/store'
@@ -14,7 +14,8 @@ const toLocal = (iso: string) => { const d = new Date(iso); d.setMinutes(d.getMi
 const nowLocal = (plusDays = 0) => toLocal(new Date(Date.now() + plusDays * 86_400_000).toISOString())
 
 export function UjianAdmin() {
-  const [tab, setTab] = useState<Tab>('ujian')
+  const qTab = useQueryParam('tab')
+  const [tab, setTab] = useState<Tab>(TABS.some(([k]) => k === qTab) ? qTab as Tab : 'ujian')
   return (
     <>
       <PageHeader title="Ujian online" sub="Atur bank soal, jadwal dan token ujian, lalu putuskan kelulusan peserta. Nilai hanya terlihat oleh staf." />
@@ -341,7 +342,7 @@ function TotalBiaya() {
   if (programs.length === 0) return <div className="card"><Empty title="Belum ada program" body="Tambahkan program di menu Program dan angkatan, lalu atur total biayanya di sini." /></div>
   return (
     <>
-      <Table head={['Program', 'Biaya pelatihan (Rp)', 'Biaya tambahan', 'Total keseluruhan', 'Dicicil setelah pendaftaran', '']}>
+      <Table head={['Program', 'Biaya pelatihan (Rp)', 'Biaya tambahan', 'Total ditagih ke peserta didik', '']}>
         {programs.map((p) => {
           const price = prices[p.id] ?? p.price
           const extra = s.feeItems.filter((x) => x.active && !x.userId && (!x.programId || x.programId === p.id)).reduce((t, x) => t + x.amount, 0)
@@ -352,13 +353,12 @@ function TotalBiaya() {
               <td><MoneyInput className="!min-h-10 min-w-36 text-right" aria-label={`Biaya pelatihan ${p.title}`} value={price} onValue={(n) => setPrices({ ...prices, [p.id]: n })} /></td>
               <td className="tabular-nums">{rupiah(extra)}</td>
               <td className="font-semibold tabular-nums">{rupiah(price + extra)}</td>
-              <td className="tabular-nums">{rupiah(Math.max(0, price + extra - regFee))}</td>
               <td className="text-right"><button className="btn-primary !min-h-10" disabled={!dirty} onClick={() => act(setProgramPrice(p.id, price), 'Total biaya program disimpan.', () => { const rest = { ...prices }; delete rest[p.id]; setPrices(rest) })}>Simpan</button></td>
             </tr>
           )
         })}
       </Table>
-      <p className="mt-3 text-xs text-muted">Kolom terakhir adalah biaya pelatihan ditambah biaya tambahan, dikurangi biaya pendaftaran {rupiah(regFee)}. Perubahan berlaku untuk peserta yang belum memilih paket pembayaran.</p>
+      <p className="mt-3 text-xs text-muted">Total ditagih = biaya pelatihan + biaya tambahan, dan seluruhnya dicicil sesuai paket pembayaran. Biaya pendaftaran {rupiah(regFee)} dibayar terpisah, di luar total ini. Perubahan berlaku untuk peserta yang belum memilih paket pembayaran.</p>
     </>
   )
 }
@@ -436,7 +436,7 @@ function PaketCicilan() {
   const [plan, setPlan] = useState<(Omit<PaymentPlan, 'id'> & { id?: string; programIds: string[] }) | null>(null)
   const programs = s.programs.filter((p) => !p.archived)
   const sample = programs[0]
-  const sampleTotal = sample ? Math.max(0, sample.price + s.feeItems.filter((x) => x.active && !x.userId && (!x.programId || x.programId === sample.id)).reduce((t, x) => t + x.amount, 0) - (s.settings.regFee ?? 0)) : 0
+  const sampleTotal = sample ? Math.max(0, sample.price + s.feeItems.filter((x) => x.active && !x.userId && (!x.programId || x.programId === sample.id)).reduce((t, x) => t + x.amount, 0)) : 0 // biaya pendaftaran di luar tagihan cicilan
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

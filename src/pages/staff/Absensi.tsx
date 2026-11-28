@@ -1,6 +1,6 @@
 import { IconFileSpreadsheet, IconFileTypePdf, IconFileWord, IconLock } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Empty, PageHeader, Table, dateTimeID, useAct } from '../../components/ui'
+import { Empty, PageHeader, Table, dateTimeID, useAct, useQueryParam } from '../../components/ui'
 import { beritaAcaraUrl, saveAttendance, subjectTeacher, teachesBatch, useStore, type State } from '../../lib/store'
 import type { Attendance, ClassSession } from '../../lib/types'
 import { buildXlsx, downloadBlob, type Cell } from '../../lib/xlsx'
@@ -11,7 +11,7 @@ const dmy = (iso: string) => new Date(iso).toLocaleDateString('id-ID', { day: '2
 
 /** Absensi per pertemuan, rekap kehadiran (bisa diekspor ke Excel), dan berita acara perkuliahan (Word dan PDF). */
 export function Absensi() {
-  const [tab, setTab] = useState<'isi' | 'rekap'>('isi')
+  const [tab, setTab] = useState<'isi' | 'rekap'>(useQueryParam('tab') === 'rekap' ? 'rekap' : 'isi')
   return (
     <>
       <PageHeader title="Absensi dan berita acara" sub="Absensi diisi sekali per pertemuan oleh instruktur pengampu. Setelah tersimpan, perubahan hanya oleh Akademik atau Super Admin." />
@@ -55,7 +55,8 @@ function IsiAbsensi() {
   const { s, me, batches } = useBatches()
   const act = useAct()
   const isAdmin = me.role === 'akademik' || me.role === 'super_admin'
-  const [batchId, setBatchId] = useState(batches[0]?.id ?? '')
+  const qBatch = useQueryParam('batch')
+  const [batchId, setBatchId] = useState(batches.some((b) => b.id === qBatch) ? qBatch : batches[0]?.id ?? '')
   const [pickSubj, setPickSubj] = useState('')
   const subject = useSubjectChoice(s, me, batchId, pickSubj)
   // Instruktur hanya mengisi pertemuan mata pelajaran yang ia ampu, dan hanya mata pelajaran yang sedang dipilih.
@@ -146,7 +147,8 @@ function rekapData(s: State, batchId: string, subjectId: string) {
 
 function Rekap() {
   const { s, me, batches } = useBatches()
-  const [batchId, setBatchId] = useState(batches[0]?.id ?? '')
+  const qBatch = useQueryParam('batch')
+  const [batchId, setBatchId] = useState(batches.some((b) => b.id === qBatch) ? qBatch : batches[0]?.id ?? '')
   const [pickSubj, setPickSubj] = useState('')
   const batch = s.batches.find((b) => b.id === batchId)
   const prog = s.programs.find((p) => p.id === batch?.programId)

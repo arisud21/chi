@@ -30,7 +30,9 @@ import { TranskripAkhir } from './pages/staff/TranskripAkhir'
 import { ManajemenKas } from './pages/staff/ManajemenKas'
 import { DashboardKas } from './pages/staff/DashboardKas'
 import { TranskripSaya } from './pages/peserta/TranskripAkhir'
-import { Audit, Dashboard, EmailQueue, Nilai, Pembayaran, Pengaturan, Pengguna, ProgramAdmin } from './pages/staff/Staff'
+import { Dashboard } from './pages/staff/Dashboard'
+import { DataDiriStaf } from './pages/staff/DataDiriStaf'
+import { Audit, EmailQueue, Nilai, Pembayaran, Pengaturan, Pengguna, ProgramAdmin } from './pages/staff/Staff'
 
 /** Rincian dari menu Pendaftar: admin keuangan melihat biaya pendaftaran saja; peran lain tetap melihat rincian lengkap. */
 function RincianPendaftar() {
@@ -74,6 +76,7 @@ export default function App() {
         <Route path="admin" element={<RequireRole staff />}>
           <Route index element={<Dashboard />} />
           <Route path="program" element={<ProgramAdmin />} />
+          <Route path="data-diri" element={<OnlyRoles roles={['instruktur']}><DataDiriStaf /></OnlyRoles>} />
           <Route path="pendaftar" element={<Pendaftar />} />
           <Route path="pendaftar/:regId" element={<OnlyRoles roles={['super_admin', 'admin_keuangan']}><RincianPendaftar /></OnlyRoles>} />
           <Route path="peserta-didik/:regId" element={<OnlyRoles roles={['super_admin', 'admin_keuangan']}><RincianBayar /></OnlyRoles>} />

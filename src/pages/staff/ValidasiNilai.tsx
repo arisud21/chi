@@ -1,5 +1,5 @@
 ﻿import { useState } from 'react'
-import { Badge, Empty, Field, Modal, PageHeader, Table, useAct } from '../../components/ui'
+import { Badge, Empty, Field, Modal, PageHeader, Table, useAct, useQueryParam } from '../../components/ui'
 import { bobotBerlaku, nilaiMapel } from '../../lib/nilaiMapel'
 import { returnGrade, returnSubject, unvalidateSubject, useStore, validateGrade, validateSubject } from '../../lib/store'
 import { StatusMapel } from './NilaiMapel'
@@ -15,7 +15,7 @@ export function ValidasiNilai() {
   const s = useStore((x) => x)
   const act = useAct()
   const [filter, setFilter] = useState<'menunggu' | 'valid' | 'semua'>('menunggu')
-  const [batchId, setBatchId] = useState('')
+  const [batchId, setBatchId] = useState(useQueryParam('batch'))
   const [dlg, setDlg] = useState<{ kind: 'return' | 'unvalidate'; batchId: string; subjectId: string; title: string } | null>(null)
   const [why, setWhy] = useState('')
 

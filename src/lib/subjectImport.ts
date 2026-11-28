@@ -107,11 +107,11 @@ export function parseSubjects(text: string): ParsedSection[] {
       const kind = kindOf(kindText)
       const perMeeting = cols.perMeeting >= 0 ? num(cells[cols.perMeeting] ?? '') : NaN
       const meetings = cols.meetings >= 0 ? num(cells[cols.meetings] ?? '') : NaN
-      let hours = cols.total >= 0 ? num(cells[cols.total] ?? '') : NaN
-      if (Number.isNaN(hours) && !Number.isNaN(perMeeting) && !Number.isNaN(meetings)) hours = perMeeting * meetings
+      // Jam total = jam per pertemuan x jumlah pertemuan bila keduanya ada (sama dengan aturan server); selain itu dari kolom jumlah jam.
+      const hours = !Number.isNaN(perMeeting) && !Number.isNaN(meetings) ? perMeeting * meetings : cols.total >= 0 ? num(cells[cols.total] ?? '') : NaN
       const problems: string[] = []
       if (!kind) problems.push('Jenis (teori atau praktik) tidak terbaca')
-      if (Number.isNaN(hours) || hours < 1 || hours > 500) problems.push('Jumlah jam tidak valid (1 sampai 500)')
+      if (Number.isNaN(hours) || hours < 1) problems.push('Jumlah jam tidak valid (minimal 1)')
       if (name.length > 120) problems.push('Nama lebih dari 120 karakter')
       rows.push({
         row: k + 1, code: (cols.code >= 0 ? cells[cols.code] ?? '' : '').slice(0, 12), name, kind: kind ?? 'teori', hours: Number.isNaN(hours) ? 0 : hours,

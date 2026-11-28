@@ -119,7 +119,7 @@ function KelasCard({ regId, batchId, programId }: { regId: string; batchId: stri
             {subjects.map((x, i) => (
               <tr key={x.subjectId}>
                 <td className="tabular-nums text-muted">{i + 1}</td>
-                <td><Link to={`/app/belajar/${b.id}/${x.subjectId}`} className="font-semibold text-brand-700 hover:underline">{x.subject?.name}</Link><p className="text-xs text-muted">{x.subject?.programId === '' ? 'Kelas gabungan · ' : ''}{x.subject ? SUBJECT_KIND[x.subject.kind] : ''}</p></td>
+                <td><Link to={`/app/belajar/${b.id}/${x.subjectId}`} className="font-semibold text-brand-700 hover:underline">{x.subject?.name}</Link><p className="text-xs text-muted">{x.groupId || x.subject?.programId === '' ? 'Kelas gabungan · ' : ''}{x.subject ? SUBJECT_KIND[x.subject.kind] : ''}</p></td>
                 <td>{x.teacher ?? '-'}</td>
                 <td>{jadwalText(x)}</td>
                 <td>{x.room || '-'}</td>
@@ -165,7 +165,7 @@ export function MataKuliah() {
   const min = s.programs.find((p) => p.id === reg.programId)?.rules.minAttendance ?? 0
   return (
     <>
-      <PageHeader title={sj?.name ?? 'Mata kuliah'} sub={`${b?.code ?? ''}${sj?.programId === '' ? ' · Kelas gabungan' : ''}${sj ? ` · ${SUBJECT_KIND[sj.kind]}` : ''}`} action={back} />
+      <PageHeader title={sj?.name ?? 'Mata kuliah'} sub={`${b?.code ?? ''}${sj?.programId === '' || s.batchSubjects.some((x) => x.batchId === batchId && x.subjectId === subjectId && x.groupId) ? ' · Kelas gabungan' : ''}${sj ? ` · ${SUBJECT_KIND[sj.kind]}` : ''}`} action={back} />
       <section className="card mb-5 p-5">
         <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div><dt className="text-xs text-muted">Instruktur</dt><dd className="font-semibold">{teacher ?? '-'}</dd></div>

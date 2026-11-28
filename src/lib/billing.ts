@@ -22,18 +22,6 @@ export function regFeeFor(s: Pick<State, 'discounts' | 'settings' | 'batches'>, 
   return Math.max(0, (s.settings.regFee ?? 200000) - cut)
 }
 
-/**
- * Pengurang total biaya registrasi (yang dicicil), sama dengan server: biaya pendaftaran yang sudah dibayar, potongan biaya pelatihan
- * dan biaya tambahan, serta potongan biaya pendaftaran bila biaya pendaftaran ikut diperhitungkan (sudah dibayar atau dipotong seluruhnya).
- */
-export function scheduleCreditFor(s: State, r: Registration) {
-  const credit = s.payments.filter((p) => p.registrationId === r.id && p.kind === 'pendaftaran' && p.status === 'verified').reduce((t, p) => t + p.amountPaid, 0)
-  const ds = discountsFor(s, r.id)
-  const reg = ds.filter((d) => d.target === 'pendaftaran').reduce((t, d) => t + d.amount, 0)
-  const other = ds.reduce((t, d) => t + d.amount, 0) - reg
-  const counted = credit > 0 || (reg > 0 && reg >= (s.settings.regFee ?? 200000))
-  return credit + other + (counted ? reg : 0)
-}
 
 /** Semua kewajiban bayar satu registrasi, urut sesuai tahapan. */
 export function itemsFor(s: State, r: Registration): Item[] {

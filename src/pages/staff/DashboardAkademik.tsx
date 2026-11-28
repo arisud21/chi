@@ -1,59 +1,22 @@
-import { IconAlertTriangle } from '@tabler/icons-react'
+import { IconBuildingStore, IconCalendarEvent, IconChartBar, IconPercentage, IconSchool, IconTable } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
-import { CountUp, Empty } from '../../components/ui'
+import { BarList, DashHeader, DashSelect, Kpi, KpiRow, Panel, Progress, TrackerTable, type Datum } from '../../components/dash'
+import { Empty } from '../../components/ui'
 import { useStore } from '../../lib/store'
-import type { Batch, BatchStatus, Registration } from '../../lib/types'
+import { ROLE_LABEL, type BatchStatus, type Registration } from '../../lib/types'
 
 /*
  * Dashboard bagian akademik: peserta didik per angkatan dan program, per mitra penempatan,
- * kehadiran dan progres pertemuan tiap angkatan, serta status nilai.
+ * kehadiran dan progres pertemuan tiap angkatan, serta status nilai. Setiap angka menuju menu terkait.
  * Semua grafik satu seri (satu warna merek); identitas dibawa label teks, bukan warna.
  */
 
 const STATUS_LABEL: Record<BatchStatus, string> = { draft: 'Draf', open: 'Dibuka', running: 'Berjalan', finished: 'Selesai', cancelled: 'Dibatalkan' }
 const isPeserta = (r: Registration) => r.stage === 'aktif' && (r.status === 'active' || r.status === 'completed')
 
-/** Satu baris grafik batang horizontal: label, batang, nilai. Seluruh baris menjadi target hover dengan tooltip. */
-function BarRow({ label, sub, value, max, display, tip, track, marker, warn }: {
-  label: ReactNode; sub?: ReactNode; value: number; max: number; display: ReactNode; tip: string
-  track?: boolean; marker?: number; warn?: boolean
-}) {
-  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
-  return (
-    <li className="group relative grid grid-cols-[minmax(7rem,11rem)_1fr_auto] items-center gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-canvas" title={tip}>
-      <span className="min-w-0"><span className="block truncate font-semibold">{label}</span>{sub && <span className="block truncate text-xs text-muted">{sub}</span>}</span>
-      <span className={`relative h-3 rounded-full ${track ? 'bg-canvas group-hover:bg-white' : ''}`} role="img" aria-label={tip}>
-        <span className="absolute inset-y-0 left-0 rounded-full bg-brand-500 transition-[width] group-hover:bg-brand-600" style={{ width: `${pct}%`, minWidth: value > 0 ? 4 : 0 }} />
-        {marker !== undefined && <span className="absolute -inset-y-1 w-0.5 rounded bg-ink/60" style={{ left: `${marker}%` }} aria-hidden />}
-      </span>
-      <span className={`flex items-center gap-1 whitespace-nowrap text-right font-semibold tabular-nums ${warn ? 'text-red-700' : ''}`}>{warn && <IconAlertTriangle size={14} aria-label="Di bawah batas" />}{display}</span>
-      <span role="tooltip" className="pointer-events-none absolute bottom-full left-1/3 z-10 mb-1 hidden w-max max-w-72 rounded-lg bg-ink px-3 py-2 text-xs text-white shadow-lg group-hover:block">{tip}</span>
-    </li>
-  )
-}
-
-function Card({ title, sub, action, children, className = '' }: { title: string; sub?: string; action?: ReactNode; children: ReactNode; className?: string }) {
-  return (
-    <section className={`card p-5 ${className}`} aria-label={title}>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-bold">{title}</h2>{sub && <p className="text-sm text-muted">{sub}</p>}</div>{action}</div>
-      {children}
-    </section>
-  )
-}
-
-function Tile({ label, value, note, suffix = '' }: { label: string; value: number | null; note: string; suffix?: string }) {
-  return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
-      <p className="mt-1 font-display text-3xl font-bold tabular-nums">{value === null ? '-' : <><CountUp to={value} />{suffix}</>}</p>
-      <p className="mt-0.5 text-xs text-muted">{note}</p>
-    </div>
-  )
-}
-
-export function DashboardAkademik() {
+export function DashboardAkademik({ todo }: { todo?: ReactNode }) {
   const s = useStore((x) => x)
+  const me = s.users.find((u) => u.id === s.sessionUserId)
   const [prog, setProg] = useState('all')
   const [status, setStatus] = useState<'all' | BatchStatus>('all')
   const [view, setView] = useState<'grafik' | 'tabel'>('grafik')
@@ -88,7 +51,6 @@ export function DashboardAkademik() {
     return { c, n: new Set(mine.map((pl) => pl.registrationId)).size, magang: mine.filter((pl) => pl.kind === 'magang').length, kerja: mine.filter((pl) => pl.kind === 'kerja').length }
   }).filter((x) => x.n > 0).sort((a, b) => b.n - a.n)
   const placedIds = new Set(places.map((pl) => pl.registrationId))
-  const maxMitra = Math.max(1, ...perMitra.map((x) => x.n))
   const topMitra = perMitra.slice(0, 8)
   const restMitra = perMitra.slice(8)
 
@@ -103,113 +65,118 @@ export function DashboardAkademik() {
   const running = batches.filter((b) => b.status === 'running').length
   const lowAtt = perBatch.filter((x) => x.attPct !== null && x.attPct < x.min)
 
-  const sel = 'input !min-h-9 !w-auto'
-  const subLabel = (b: Batch, prog?: string) => [prog, STATUS_LABEL[b.status]].filter(Boolean).join(' · ')
+  // Tujuan klik: peserta per angkatan, jadwal angkatan, rekap absensi angkatan, validasi nilai angkatan.
+  const toPeserta = (id: string) => `/admin/peserta?batch=${id}`
+  const toJadwal = (pid: string, id: string) => `/admin/jadwal?program=${pid}&batch=${id}`
+  const toAbsen = (id: string) => `/admin/absensi?tab=rekap&batch=${id}`
+  const oneBatch = batches.length === 1 ? batches[0].id : ''
+  const toNilai = `/admin/validasi-nilai${oneBatch ? `?batch=${oneBatch}` : ''}`
+
+  const toggle = (
+    <div role="tablist" aria-label="Tampilan" className="flex rounded-lg bg-white/10 p-0.5 text-sm">
+      {(['grafik', 'tabel'] as const).map((k) => <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)} className={`inline-flex min-h-8 items-center gap-1 rounded-md px-3 font-semibold ${view === k ? 'bg-white text-brand-700' : 'text-white hover:bg-white/10'}`}>{k === 'grafik' ? <><IconChartBar size={15} />Grafik</> : <><IconTable size={15} />Tabel</>}</button>)}
+    </div>
+  )
 
   return (
-    <div className="space-y-5 lg:col-span-3">
-      <div className="flex flex-wrap items-center gap-2" aria-label="Filter dashboard akademik">
-        <select className={sel} value={prog} onChange={(e) => setProg(e.target.value)} aria-label="Filter program">
+    <>
+      <DashHeader title="Ringkasan akademik" sub={me ? `${me.name} · ${ROLE_LABEL[me.role]}` : undefined}>
+        <DashSelect label="Filter program" value={prog} onChange={setProg}>
           <option value="all">Semua program</option>{programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-        </select>
-        <select className={sel} value={status} onChange={(e) => setStatus(e.target.value as 'all' | BatchStatus)} aria-label="Filter status angkatan">
-          <option value="all">Semua status angkatan</option>{(Object.keys(STATUS_LABEL) as BatchStatus[]).map((k) => <option key={k} value={k}>{STATUS_LABEL[k]}</option>)}
-        </select>
-        <span className="flex-1" />
-        <div role="tablist" aria-label="Tampilan" className="flex rounded-lg border border-line p-0.5 text-sm">
-          {(['grafik', 'tabel'] as const).map((k) => <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)} className={`min-h-8 rounded-md px-3 font-semibold ${view === k ? 'bg-brand-600 text-white' : 'text-muted hover:text-ink'}`}>{k === 'grafik' ? 'Grafik' : 'Tabel'}</button>)}
-        </div>
-      </div>
+        </DashSelect>
+        <DashSelect label="Filter status angkatan" value={status} onChange={(v) => setStatus(v as 'all' | BatchStatus)}>
+          <option value="all">Semua status</option>{(Object.keys(STATUS_LABEL) as BatchStatus[]).map((k) => <option key={k} value={k}>{STATUS_LABEL[k]}</option>)}
+        </DashSelect>
+        {toggle}
+      </DashHeader>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Tile label="Peserta didik" value={peserta.length} note={`di ${batches.length} angkatan`} />
-        <Tile label="Angkatan berjalan" value={running} note="status Berjalan" />
-        <Tile label="Rata-rata kehadiran" value={avgAtt} suffix="%" note={lowAtt.length ? `${lowAtt.length} angkatan di bawah minimal` : 'dari absensi yang tercatat'} />
-        <Tile label="Sudah ditempatkan" value={placedIds.size} note={`di ${perMitra.length} mitra, magang atau kerja`} />
-      </div>
+      <KpiRow>
+        <Kpi to={oneBatch ? toPeserta(oneBatch) : '/admin/peserta'} icon={IconSchool} label="Peserta didik" value={peserta.length} note={`di ${batches.length} angkatan`} />
+        <Kpi to="/admin/jadwal" icon={IconCalendarEvent} label="Angkatan berjalan" value={running} note="Status Berjalan" />
+        <Kpi to="/admin/absensi?tab=rekap" icon={IconPercentage} label="Rata-rata kehadiran" value={avgAtt} suffix="%" note={lowAtt.length ? `${lowAtt.length} angkatan di bawah minimal` : 'Dari absensi yang tercatat'} tone={lowAtt.length ? 'warn' : 'brand'} />
+        <Kpi to="/admin/penempatan" icon={IconBuildingStore} label="Sudah ditempatkan" value={placedIds.size} note={`di ${perMitra.length} mitra, magang atau kerja`} tone="good" />
+      </KpiRow>
 
-      {view === 'tabel' ? (
-        <Card title="Rekap per angkatan" sub="Data yang sama dengan grafik, dalam bentuk tabel.">
-          {perBatch.length === 0 ? <Empty title="Tidak ada angkatan" body="Tidak ada angkatan yang cocok dengan filter ini." /> : (
-            <div className="overflow-x-auto"><table className="w-full text-sm">
-              <thead><tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted"><th className="py-2 pr-3">Angkatan</th><th className="pr-3">Program</th><th className="pr-3">Status</th><th className="pr-3 text-right">Peserta</th><th className="pr-3 text-right">Kuota</th><th className="pr-3 text-right">Pertemuan</th><th className="text-right">Kehadiran</th></tr></thead>
-              <tbody>{perBatch.map(({ b, p, n, held, planned, attPct, min }) => (
-                <tr key={b.id} className="border-b border-line last:border-0"><td className="py-2 pr-3 font-semibold">{b.code}{b.angkatan ? ` (Angkatan ${b.angkatan})` : ''}</td><td className="pr-3">{p?.title}</td><td className="pr-3">{STATUS_LABEL[b.status]}</td><td className="pr-3 text-right tabular-nums">{n}</td><td className="pr-3 text-right tabular-nums">{b.quota}</td><td className="pr-3 text-right tabular-nums">{held}/{planned || '-'}</td><td className={`text-right tabular-nums ${attPct !== null && attPct < min ? 'font-semibold text-red-700' : ''}`}>{attPct === null ? '-' : `${attPct}%`}</td></tr>
-              ))}</tbody>
-            </table></div>
+      <div className="grid gap-5 xl:grid-cols-3">
+        {view === 'tabel' ? <>
+          <Panel title="Rekap per angkatan" sub="Klik baris untuk membuka peserta didik angkatan itu." flush className="xl:col-span-2">
+            {perBatch.length === 0 ? <Empty title="Tidak ada angkatan" body="Tidak ada angkatan yang cocok dengan filter ini." /> : (
+              <TrackerTable head={['Angkatan', 'Program', 'Status', 'Peserta', 'Kuota', 'Pertemuan', 'Kehadiran']} rows={perBatch.map(({ b, p, n, held, planned, attPct, min }) => ({
+                key: b.id, to: toPeserta(b.id), label: `Peserta didik ${b.code}`,
+                cells: [`${b.code}${b.angkatan ? ` (Angkatan ${b.angkatan})` : ''}`, p?.title ?? '-', STATUS_LABEL[b.status], n, b.quota, `${held}/${planned || '-'}`,
+                  <span className={attPct !== null && attPct < min ? 'font-semibold text-red-700' : ''}>{attPct === null ? '-' : `${attPct}%`}</span>],
+              }))} />
+            )}
+          </Panel>
+          {todo}
+          {perMitra.length > 0 && (
+            <Panel title="Rekap per mitra" sub="Klik baris untuk membuka menu Penempatan." flush className="xl:col-span-3">
+              <TrackerTable head={['Mitra', 'Kota', 'Peserta', 'Magang', 'Kerja']} rows={perMitra.map(({ c, n, magang, kerja }) => ({
+                key: c.id, to: '/admin/penempatan', label: `Penempatan di ${c.name}`, cells: [c.name, c.city || '-', n, magang, kerja],
+              }))} />
+            </Panel>
           )}
-          {perMitra.length > 0 && <div className="mt-5 overflow-x-auto"><table className="w-full text-sm">
-            <thead><tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted"><th className="py-2 pr-3">Mitra</th><th className="pr-3">Kota</th><th className="pr-3 text-right">Peserta</th><th className="pr-3 text-right">Magang</th><th className="text-right">Kerja</th></tr></thead>
-            <tbody>{perMitra.map(({ c, n, magang, kerja }) => <tr key={c.id} className="border-b border-line last:border-0"><td className="py-2 pr-3 font-semibold">{c.name}</td><td className="pr-3">{c.city || '-'}</td><td className="pr-3 text-right tabular-nums">{n}</td><td className="pr-3 text-right tabular-nums">{magang}</td><td className="text-right tabular-nums">{kerja}</td></tr>)}</tbody>
-          </table></div>}
-        </Card>
-      ) : <>
-        <Card title="Peserta didik per angkatan" sub="Jumlah peserta didik aktif atau selesai dibanding kuota angkatan." action={<Link to="/admin/jadwal" className="btn-ghost !min-h-9">Jadwal</Link>}>
-          {perBatch.length === 0 ? <Empty title="Tidak ada angkatan" body="Tidak ada angkatan yang cocok dengan filter ini." /> : (
-            <div className="space-y-4">
-              {[...new Set(perBatch.map((x) => x.b.programId))].map((pid) => {
-                const rows = perBatch.filter((x) => x.b.programId === pid)
-                const p = rows[0].p
-                return (
-                  <div key={pid}>
-                    {prog === 'all' && <p className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-muted">{p?.title ?? 'Program'} · {rows.reduce((t, x) => t + x.n, 0)} peserta</p>}
-                    <ul>{rows.map(({ b, n }) => (
-                      <BarRow key={b.id} track label={b.angkatan ? `Angkatan ${b.angkatan}` : b.code} sub={subLabel(b, b.code)} value={n} max={maxN}
-                        display={<>{n}<span className="font-normal text-muted">/{b.quota}</span></>}
-                        tip={`${b.code} · ${p?.title}: ${n} peserta dari kuota ${b.quota}${b.startDate ? `, mulai ${b.startDate}` : ''}`} />
-                    ))}</ul>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </Card>
+        </> : <>
+          <Panel title="Peserta didik per angkatan" sub="Peserta aktif atau selesai dibanding kuota. Klik untuk membuka daftar pesertanya." to="/admin/peserta" linkLabel="Peserta didik" className="xl:col-span-2">
+            {perBatch.length === 0 ? <Empty title="Tidak ada angkatan" body="Tidak ada angkatan yang cocok dengan filter ini." /> : (
+              <div className="space-y-4">
+                {[...new Set(perBatch.map((x) => x.b.programId))].map((pid) => {
+                  const rows = perBatch.filter((x) => x.b.programId === pid)
+                  const p = rows[0].p
+                  return (
+                    <div key={pid}>
+                      {prog === 'all' && <p className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-muted">{p?.title ?? 'Program'} · {rows.reduce((t, x) => t + x.n, 0)} peserta</p>}
+                      <BarList max={maxN} data={rows.map(({ b, n }): Datum => ({
+                        key: b.id, label: b.angkatan ? `Angkatan ${b.angkatan}` : b.code, sub: `${b.code} · ${STATUS_LABEL[b.status]}`, value: n, to: toPeserta(b.id),
+                        display: <>{n}<span className="font-normal text-muted">/{b.quota}</span></>, tip: `${b.code} · ${p?.title}: ${n} peserta dari kuota ${b.quota}`,
+                      }))} />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </Panel>
+          {todo}
 
-        <div className="grid gap-5 xl:grid-cols-2">
-          <Card title="Peserta per mitra" sub="Peserta didik yang ditempatkan magang atau kerja, tidak termasuk yang batal." action={<Link to="/admin/penempatan" className="btn-ghost !min-h-9">Penempatan</Link>}>
+          <Panel title="Peserta per mitra" sub="Ditempatkan magang atau kerja, tidak termasuk yang batal." to="/admin/penempatan" linkLabel="Penempatan">
             {perMitra.length === 0 ? <Empty title="Belum ada penempatan" body="Grafik terisi setelah peserta didik ditempatkan di mitra lewat menu Penempatan." /> : <>
-              <ul>{topMitra.map(({ c, n, magang, kerja }) => (
-                <BarRow key={c.id} label={c.name} sub={[c.city, `${magang} magang · ${kerja} kerja`].filter(Boolean).join(' · ')} value={n} max={maxMitra} display={n}
-                  tip={`${c.name}: ${n} peserta (${magang} magang, ${kerja} kerja)`} />
-              ))}</ul>
+              <BarList data={topMitra.map(({ c, n, magang, kerja }) => ({ key: c.id, label: c.name, sub: `${magang} magang · ${kerja} kerja`, value: n, to: '/admin/penempatan', tip: `${c.name}: ${n} peserta (${magang} magang, ${kerja} kerja)` }))} />
               {restMitra.length > 0 && <p className="mt-2 px-2 text-xs text-muted">Dan {restMitra.length} mitra lain dengan total {restMitra.reduce((t, x) => t + x.n, 0)} peserta. Lihat semua di tampilan Tabel.</p>}
               <p className="mt-3 px-2 text-xs text-muted">{peserta.length - placedIds.size} peserta didik belum ditempatkan.</p>
             </>}
-          </Card>
+          </Panel>
 
-          <Card title="Status nilai" sub="Pengisian nilai oleh instruktur dan validasi akademik." action={<Link to="/admin/nilai" className="btn-ghost !min-h-9">Nilai</Link>}>
+          <Panel title="Status nilai" sub="Pengisian nilai oleh instruktur dan validasi akademik." to={toNilai} linkLabel="Validasi nilai">
             {peserta.length === 0 ? <Empty title="Belum ada peserta" body="Status nilai muncul setelah ada peserta didik di angkatan terpilih." /> : <>
-              <ul>
-                <BarRow label="Belum diisi" value={gStat.belum + gStat.draft} max={peserta.length} display={gStat.belum + gStat.draft} track tip={`${gStat.belum + gStat.draft} peserta belum diajukan nilainya oleh instruktur`} />
-                <BarRow label="Menunggu validasi" value={gStat.submitted} max={peserta.length} display={gStat.submitted} track tip={`${gStat.submitted} nilai diajukan instruktur dan menunggu validasi akademik`} />
-                <BarRow label="Tervalidasi" value={gStat.validated} max={peserta.length} display={gStat.validated} track tip={`${gStat.validated} nilai sudah divalidasi`} />
-              </ul>
+              <BarList max={peserta.length} data={[
+                { key: 'belum', label: 'Belum diisi', value: gStat.belum + gStat.draft, to: toNilai, tip: `${gStat.belum + gStat.draft} peserta belum diajukan nilainya oleh instruktur` },
+                { key: 'submitted', label: 'Menunggu validasi', value: gStat.submitted, to: toNilai, tip: `${gStat.submitted} nilai menunggu validasi akademik` },
+                { key: 'validated', label: 'Tervalidasi', value: gStat.validated, to: toNilai, tip: `${gStat.validated} nilai sudah divalidasi` },
+              ]} />
               <p className="mt-3 px-2 text-sm">Hasil tervalidasi: <b className="tabular-nums">{lulus}</b> lulus, <b className="tabular-nums">{tidakLulus}</b> tidak lulus{gStat.validated ? ` (${Math.round((lulus / gStat.validated) * 100)}% lulus)` : ''}.</p>
             </>}
-          </Card>
-        </div>
+          </Panel>
 
-        <div className="grid gap-5 xl:grid-cols-2">
-        <Card title="Kehadiran per angkatan" sub="Persentase hadir dari absensi yang tercatat. Garis tegak menandai minimal kehadiran program." action={<Link to="/admin/absensi" className="btn-ghost !min-h-9">Absensi</Link>}>
-          {perBatch.every((x) => x.attPct === null) ? <Empty title="Belum ada absensi" body="Grafik terisi setelah instruktur mencatat absensi pertemuan." /> : (
-            <ul>{perBatch.filter((x) => x.attPct !== null).map(({ b, p, attPct, min }) => (
-              <BarRow key={b.id} track label={b.code} sub={p?.title} value={attPct!} max={100} marker={min} warn={attPct! < min}
-                display={`${attPct}%`} tip={`${b.code}: kehadiran ${attPct}%, minimal ${min}%${attPct! < min ? ' (di bawah minimal)' : ''}`} />
-            ))}</ul>
-          )}
-        </Card>
+          <Panel title="Kehadiran per angkatan" sub="Persentase hadir. Garis tegak = minimal kehadiran program." to="/admin/absensi?tab=rekap" linkLabel="Absensi">
+            {perBatch.every((x) => x.attPct === null) ? <Empty title="Belum ada absensi" body="Grafik terisi setelah instruktur mencatat absensi pertemuan." /> : (
+              <BarList max={100} marker={(d) => perBatch.find((x) => x.b.id === d.key)?.min} warn={(d) => { const x = perBatch.find((y) => y.b.id === d.key); return !!x && x.attPct! < x.min }}
+                data={perBatch.filter((x) => x.attPct !== null).map(({ b, p, attPct, min }) => ({
+                  key: b.id, label: b.code, sub: p?.title, value: attPct!, display: `${attPct}%`, to: toAbsen(b.id),
+                  tip: `${b.code}: kehadiran ${attPct}%, minimal ${min}%${attPct! < min ? ' (di bawah minimal)' : ''}`,
+                }))} />
+            )}
+          </Panel>
 
-        <Card title="Progres pertemuan" sub="Pertemuan yang sudah diabsen dibanding rencana pertemuan angkatan.">
-          {perBatch.filter((x) => x.b.status === 'running' || x.held > 0).length === 0 ? <Empty title="Belum ada pertemuan" body="Progres muncul setelah angkatan berjalan dan pertemuan pertama diabsen." /> : (
-            <ul>{perBatch.filter((x) => x.b.status === 'running' || x.held > 0).map(({ b, p, held, planned }) => (
-              <BarRow key={b.id} track label={b.code} sub={p?.title} value={held} max={Math.max(planned, held, 1)}
-                display={<>{held}<span className="font-normal text-muted">/{planned || '?'}</span></>}
-                tip={`${b.code}: ${held} dari ${planned || 'belum ditentukan'} pertemuan sudah terlaksana`} />
-            ))}</ul>
-          )}
-        </Card>
-        </div>
-      </>}
-    </div>
+          <Panel title="Progres pertemuan" sub="Pertemuan yang sudah diabsen dibanding rencana. Klik untuk membuka jadwal angkatan." to="/admin/jadwal" linkLabel="Jadwal" className="xl:col-span-3" flush>
+            {perBatch.filter((x) => x.b.status === 'running' || x.held > 0).length === 0 ? <Empty title="Belum ada pertemuan" body="Progres muncul setelah angkatan berjalan dan pertemuan pertama diabsen." /> : (
+              <TrackerTable head={['Angkatan', 'Program', 'Status', 'Terlaksana', 'Progres']} rows={perBatch.filter((x) => x.b.status === 'running' || x.held > 0).map(({ b, p, held, planned }) => ({
+                key: b.id, to: toJadwal(b.programId, b.id), label: `Jadwal ${b.code}`,
+                cells: [b.code, p?.title ?? '-', STATUS_LABEL[b.status], <span className="tabular-nums">{held}/{planned || '?'}</span>, <Progress value={held} max={Math.max(planned, held, 1)} />],
+              }))} />
+            )}
+          </Panel>
+        </>}
+      </div>
+    </>
   )
 }

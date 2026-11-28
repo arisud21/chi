@@ -2,7 +2,7 @@ import type { State } from './store'
 
 /**
  * Nilai akhir per mata pelajaran (format "Template Nilai Akhir Mata Pelajaran - CHI"):
- * Absensi + Tugas + UTS (teori) + UAS (praktik), masing-masing dikali bobotnya.
+ * Absensi + Tugas + nilai teori + nilai praktik, masing-masing dikali bobotnya.
  * Absensi terisi otomatis dari rekap kehadiran; tugas, teori, dan praktik diinput manual instruktur (skala 0-100).
  */
 export const BOBOT_BAWAAN = { absensi: 10, tugas: 20, teori: 30, praktik: 40 }
@@ -55,7 +55,7 @@ export interface NilaiMapel {
   tugas: number | null // nilai tugas (manual, 0-100); null = belum diisi
   teori: number | null
   praktik: number | null
-  /** Nilai terbobot tiap komponen (kolom Absensi, Tugas, UTS, UAS di template). */
+  /** Nilai terbobot tiap komponen (kolom Absensi, Tugas, Teori, Praktik di template). */
   poin: { absensi: number; tugas: number; teori: number; praktik: number }
   akhir: number
   huruf: string

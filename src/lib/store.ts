@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type {
   Assignment, Attendance, AuditLog, ChiTodayItem, Batch, BatchSubject, Curriculum, Discount, Subject, ClassSession, EmailItem, Grade, SubjectGrade, MediaAsset, Material, Payment,
-  Profile, Program, Registration, Revision, Installment, PaymentPlan, FeeItem, ExamToken, Doc, DocKind, Exam, QuestionBank, Question, ExamAttempt, Notification, Company, Placement, LogbookEntry, CashTx, NewsItem, Section, SiteSettings, Submission, User,
+  Profile, Program, Registration, Revision, Installment, PaymentPlan, FeeItem, ExamToken, Doc, DocKind, Exam, QuestionBank, Question, ExamAttempt, Notification, Company, Placement, LogbookEntry, CashTx, NewsItem, Section, SiteSettings, StaffCert, StaffProfile, Submission, User,
 } from './types'
 
 /**
@@ -58,13 +58,15 @@ export interface State {
   cashTx: CashTx[]
   news: NewsItem[]
   chiToday: ChiTodayItem[]
+  staffProfiles: StaffProfile[]
+  staffCerts: StaffCert[]
 }
 
 const EMPTY: State = {
   loaded: false, devMode: false, sessionUserId: null, users: [], programs: [], batches: [], seats: {}, curricula: [], subjects: [], batchSubjects: [], stats: { graduates: 0, participants: 0 },
   registrations: [], payments: [], sessions: [], materials: [], assignments: [], submissions: [], attendances: [], profiles: [], grades: [], subjectGrades: [], gradeWeights: { absensi: 10, tugas: 20, teori: 30, praktik: 40 }, gradeLetters: [85, 80, 75, 70, 60, 50, 40],
   audit: [], emails: [], settings: {} as SiteSettings, media: [], publishedSections: [], draftSections: [], publishedRevisionId: null, revisions: [],
-  installments: [], discounts: [], documents: [], plans: [], feeItems: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], notifications: [], companies: [], placements: [], logbook: [], cashTx: [], news: [], chiToday: [],
+  installments: [], discounts: [], documents: [], plans: [], feeItems: [], exams: [], banks: [], questions: [], attempts: [], examTokens: [], notifications: [], companies: [], placements: [], logbook: [], cashTx: [], news: [], chiToday: [], staffProfiles: [], staffCerts: [],
 }
 
 let state: State = EMPTY
@@ -267,6 +269,18 @@ export const uploadDocument = (kind: DocKind, file: File) => {
   f.set('file', file)
   return upload(`/api/upload/document/${kind}`, f)
 }
+/** Data diri instruktur. */
+export const saveStaffProfile = (p: { name: string; nik: string; birthPlace: string; birthDate: string; gender: string; marital: string; religion: string; address: string; phone: string; email: string }) => rpc('saveStaffProfile', p)
+export const uploadStaffFile = (which: 'photo' | 'cv' | 'cert', file: File, label = '') => {
+  const f = new FormData()
+  f.set('file', file)
+  if (label) f.set('label', label)
+  return upload(`/api/upload/staff/${which}`, f)
+}
+export const deleteStaffCert = (id: string) => rpc('deleteStaffCert', id)
+/** Pas foto akun: data diri instruktur, atau berkas pas foto 3x4 peserta didik. Kosong bila belum ada. */
+export const photoOf = (s: Pick<State, 'staffProfiles' | 'documents'>, userId: string) =>
+  s.staffProfiles.find((p) => p.userId === userId)?.photoFileId || s.documents.find((d) => d.userId === userId && d.kind === 'foto')?.fileId || ''
 export const saveProfileAsAdmin = (userId: string, fields: Record<string, string>) => {
   const f = new FormData()
   for (const [k, v] of Object.entries(fields)) f.set(k, v)
